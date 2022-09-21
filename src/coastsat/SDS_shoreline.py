@@ -10,6 +10,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import pdb
+import importlib.resources
 
 # image processing modules
 import skimage.filters as filters
@@ -35,8 +36,17 @@ from pylab import ginput
 
 # CoastSat modules
 from coastsat import SDS_tools, SDS_preprocess
-
+# from coastsat import classification
+from coastsat.classification import models
+from coastsat.classification import training_data
+from coastsat.classification import training_sites
 np.seterr(all='ignore') # raise/ignore divisions by 0 and nans
+
+# @todo remove this after testing imports
+def test_imports():
+    print(list(os.path.abspath(resource) for resource in importlib.resources.files(models).iterdir() if resource.is_file()))
+    print(list(os.path.abspath(resource) for resource in importlib.resources.files(training_data).iterdir() if resource.is_file()))
+    print(list(os.path.abspath(resource) for resource in importlib.resources.files(training_sites).iterdir() if resource.is_file()))
 
 # Main function for batch shoreline detection
 def extract_shorelines(metadata, settings):
@@ -86,7 +96,15 @@ def extract_shorelines(metadata, settings):
     sitename = settings['inputs']['sitename']
     filepath_data = settings['inputs']['filepath']
     collection = settings['inputs']['landsat_collection']
-    filepath_models = os.path.join(os.getcwd(), 'classification', 'models')
+    # filepath_models = os.path.join(os.getcwd(), 'classification', 'models')
+    # @todo test new imports
+    filepath_models = os.path.abspath(importlib.resources.files(models))
+    # filepath_models=""
+    # with importlib.resources.as_file(importlib.resources.files('classification').joinpath('models')) as f:
+    #     print(f)
+    #     filepath_models=os.path.abspath(f)
+    # model_paths = list(os.path.abspath(resource) for resource in importlib.resources.files(models).iterdir() if resource.is_file())
+
     # initialise output structure
     output = dict([])
     # create a subfolder to store the .jpg images showing the detection
@@ -345,7 +363,7 @@ def classify_image_NN(im_ms, cloud_mask, min_beach_area, clf):
     clf: joblib object
         pre-trained classifier
 
-    Returns:    
+    Returns:
     -----------
     im_classif: np.array
         2D image containing labels
@@ -361,7 +379,7 @@ def classify_image_NN(im_ms, cloud_mask, min_beach_area, clf):
     # remove NaNs and cloudy pixels
     vec_cloud = cloud_mask.reshape(cloud_mask.shape[0]*cloud_mask.shape[1])
     vec_nan = np.any(np.isnan(vec_features), axis=1)
-    vec_inf = np.any(np.isinf(vec_features), axis=1)    
+    vec_inf = np.any(np.isinf(vec_features), axis=1)
     vec_mask = np.logical_or(vec_cloud,np.logical_or(vec_nan,vec_inf))
     vec_features = vec_features[~vec_mask, :]
 

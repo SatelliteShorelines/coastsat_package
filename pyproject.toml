@@ -2,18 +2,19 @@
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+# tells setup tools to include the data in the coastsat directory
 [tool.setuptools.packages.find]
-include = ["coastsat*"]  # package names should match these glob patterns (["*"] by default)
-exclude = ["coastsat.tests*"]  # exclude packages matching these glob patterns (empty by default)
-namespaces = false  # to disable scanning PEP 420 namespaces (true by default)
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*"=["*.kml","*.pkl"]
 
 [project]
-name = "pkg_toml_test_2320sharon"
+name = "coastsat_package"
 dynamic = ["readme"]
-version = "0.0.19"
+version = "0.0.1"
 authors = [
-  { name="Sharon Fitzpatrick", email="sharon.fitzpatrick23@gmail.com" },
-  { name="Kilian Vos" },
+  { name=" Kilian Vos Sharon Fitzpatrick", email="sharon.fitzpatrick23@gmail.com" },
 ]
 # find` directive with `include` or `exclude`
 description = "A Global shoreline mapping tool from satellite imagery"
