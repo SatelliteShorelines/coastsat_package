@@ -1,5 +1,40 @@
-# CoastSat
+# CoastSat_Package Repo
+:warning: This package is still under active development :warning:
 
+## Install CoastSat with Pip
+[PyPi Repo](https://pypi.org/project/coastsat-package/)
+- Note: This package is still in beta and being actively developed.
+1. Create a conda environment
+- We will install the CoastSat package and its dependencies in this environment.
+	> `conda create --name coastsat_pkg -y`	
+2. Activate your conda environment
+	>`conda activate coastsat_pkg `	
+3. Install geopandas with Conda
+	- [Geopandas](https://geopandas.org/en/stable/) has [GDAL](https://gdal.org/) as a dependency so its best to install it with conda.
+	>`conda install geopandas -y`
+4. Install pip in your conda environment
+- We will use pip to install the coastsat package from [PyPi](https://pypi.org/)
+	>  `conda install pip -y`
+5. Install the pip package
+- `-U` (upgrade flag) this gets the latest release of the CoastSat package
+	> `pip install coastsat_package -U`
+
+
+## Current Problems with the CoastSat Package
+1. **GDAL Dependency**
+CoastSat relies on `geopandas` as a dependency which in turn has `GDAL` . `GDAL` is a uncompiled source distribution which means the user has to build GDAL on their system if they want to use the official release. Alternatively users can download a precompiled python wheel for their OS from [Christoph Gohlke’s website](https://www.lfd.uci.edu/~gohlke/pythonlibs/#gdal).
+2. **ReadMe is not compatible with PyPi**
+In order to allow the ReadMe to be uploaded to PyPi I had to remove a few sections of the readme that weren't compatible. I kept the original Readme but renamed it to `READMEgithub.md`.
+3. **Conda has to be used to Install CoastSat**
+Due to CoastSat's dependency on geopandas conda has to be used to install the pip package. This also means the user has to install the dependencies in the exact order I described in the earlier section `install coastsat with pip` otherwise errors are likely to occur.
+
+## Solutions
+1. **GDAL Dependency**
+For now I've found the easist solution is to install `geopandas` with `conda` as it takes care of the dirty work of creating a compatible environment for `geopandas` and `GDAL`. The downside of this approach is it means the user will have to run the commands to install `geopandas`,`pip`, and `coastsat_pkg` in a that exact order. When I tried the order  `pip`,  `coastsat_pkg`, then `geopandas` the installation failed on my windows machine.
+
+	In the future I hope we can put the dependency for geopandas in the same pip package or conda package as coastsat but for now this solution works. Maybe we could detect what OS the user has and install the corresponding GDAL wheel on their system so that we can have geopandas as a pip dependency? [This guide shows how to install GDAL using pip](https://opensourceoptions.com/blog/how-to-install-gdal-for-python-with-pip-on-windows/)
+
+## More About CoastSat
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.2779293.svg)](https://doi.org/10.5281/zenodo.2779293)
 [![Join the chat at https://gitter.im/CoastSat/community](https://badges.gitter.im/spyder-ide/spyder.svg)](https://gitter.im/CoastSat/community)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
