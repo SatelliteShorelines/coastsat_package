@@ -1,1 +1,2 @@
-src\*egg-info*
+*egg-info*
+*pycache*
