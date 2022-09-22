@@ -126,13 +126,12 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         
         # no extra image for Landsat 5 (they are all 30 m bands)
         im_extra = []
-=======
+
         # read cloud mask
         data = gdal.Open(fn_mask, gdal.GA_ReadOnly)
         bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
         im_QA = bands[0]
         cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
->>>>>>> 4773e87f805056652698f46a97129b16f487c51e
 
     #=============================================================================================#
     # L7, L8 and L9 images
@@ -607,17 +606,23 @@ def save_jpg(metadata, settings, **kwargs):
         'cloud_mask_issue': boolean
             True if there is an issue with the cloud mask and sand pixels
             are erroneously being masked on the images
-            
+        'create_plot': boolean
+            True create a matplotlib plot of the image with the datetime as the title
+            False save as a standard JPG
     Returns:
     -----------
     Stores the images as .jpg in a folder named /preprocessed
-    
+
     """
     
     sitename = settings['inputs']['sitename']
     cloud_thresh = settings['cloud_thresh']
     filepath_data = settings['inputs']['filepath']
     collection = settings['inputs']['landsat_collection']
+    # Create a matplotlib plot for each image
+    create_plot = True
+    if 'create_plot' in settings:
+        create_plot = settings['create_plot']
 
     # create subfolder to store the jpg files
     filepath_jpg = os.path.join(filepath_data, sitename, 'jpg_files', 'preprocessed')
@@ -627,7 +632,6 @@ def save_jpg(metadata, settings, **kwargs):
     # loop through satellite list
     print('Saving images as jpg:')
     for satname in metadata.keys():
-        
         filepath = SDS_tools.get_filepath(settings['inputs'],satname)
         filenames = metadata[satname]['filenames']
         print('%s: %d images'%(satname,len(filenames)))
@@ -708,6 +712,7 @@ def get_reference_sl(metadata, settings):
         with open(os.path.join(filepath, sitename + '_reference_shoreline.pkl'), 'rb') as f:
             refsl = pickle.load(f)
         return refsl
+
     # otherwise get the user to manually digitise a shoreline on 
     # S2, L8, L9 or L5 images (no L7 because of scan line error)
     # first try to use S2 images (10m res for manually digitizing the reference shoreline)
@@ -793,7 +798,7 @@ def get_reference_sl(metadata, settings):
                 raise StopIteration('User cancelled checking shoreline detection')
             else:
                 plt.waitforbuttonpress()
-                
+
         if skip_image:
             ax.clear()
             continue
