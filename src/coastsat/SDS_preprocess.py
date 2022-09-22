@@ -661,7 +661,7 @@ def save_jpg(metadata, settings, **kwargs):
             # save .jpg with date and satellite in the title
             date = filenames[i][:19]
             plt.ioff()  # turning interactive plotting off
-            create_jpg(im_ms, cloud_mask, date, satname, filepath_jpg)
+            create_jpg(im_ms, cloud_mask, date, satname, filepath_jpg, create_plot)
         print('')
     # print the location where the images have been saved
     print('Satellite images saved as .jpg in ' + os.path.join(filepath_data, sitename,
