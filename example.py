@@ -90,7 +90,7 @@ settings = {
     'pan_off': False,           # True to switch pansharpening off for Landsat 7/8/9 imagery
     # add the inputs defined previously
     'inputs': inputs,
-    'create_plot': False,        #True create a matplotlib plot of the image with the datetime as the title. False save as a standard JPG
+    'create_plot': True,        #True create a matplotlib plot of the image with the datetime as the title. False save as a standard JPG
 }
 
 # [OPTIONAL] preprocess images (cloud masking, pansharpening/down-sampling)
