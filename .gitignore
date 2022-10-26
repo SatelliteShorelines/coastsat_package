@@ -1,2 +1,5 @@
 *egg-info*
 *pycache*
+data/*
+*ipynb_checkpoints*
+dist/*

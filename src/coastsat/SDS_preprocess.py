@@ -20,7 +20,6 @@ import skimage.exposure as exposure
 from skimage.io import imsave
 from skimage import img_as_ubyte
 
-
 # other modules
 from osgeo import gdal
 from pylab import ginput
@@ -39,7 +38,7 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
     """
     Reads the image and outputs the pansharpened/down-sampled multispectral bands,
     the georeferencing vector of the image (coordinates of the upper left pixel),
-    the cloud mask, the QA band and a no_data image.
+    the cloud mask, the QA band and a no_data image. 
     For Landsat 7-8 it also outputs the panchromatic band and for Sentinel-2 it
     also outputs the 20m SWIR band.
 
@@ -48,7 +47,7 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
     Arguments:
     -----------
     fn: str or list of str
-        filename of the .TIF file containing the image. For L7, L8 and S2 this
+        filename of the .TIF file containing the image. For L7, L8 and S2 this 
         is a list of filenames, one filename for each band at different
         resolution (30m and 15m for Landsat 7-8, 10m, 20m, 60m for Sentinel-2)
     satname: str
@@ -59,7 +58,7 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         if True, disable panchromatic sharpening and ignore pan band
     collection: str
         Landsat collection ,'C01' or 'C02'
-
+        
     Returns:
     -----------
     im_ms: np.array
@@ -121,12 +120,18 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         for k in [1,3,4]: # loop through the Green, NIR and SWIR bands
             im_zeros = np.logical_and(np.isin(im_ms[:,:,k],0), im_zeros)
         # add zeros to im nodata
-        im_nodata = np.logical_or(im_zeros, im_nodata)
+        im_nodata = np.logical_or(im_zeros, im_nodata)   
         # update cloud mask with all the nodata pixels
         cloud_mask = np.logical_or(cloud_mask, im_nodata)
-
+        
         # no extra image for Landsat 5 (they are all 30 m bands)
         im_extra = []
+
+        # read cloud mask
+        data = gdal.Open(fn_mask, gdal.GA_ReadOnly)
+        bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
+        im_QA = bands[0]
+        cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
 
     #=============================================================================================#
     # L7, L8 and L9 images
@@ -206,53 +211,42 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
     # S2 images
     #=============================================================================================#
     if satname == 'S2':
-
         # read 10m bands (R,G,B,NIR)
-        fn10 = fn[0]
-        data = gdal.Open(fn10, gdal.GA_ReadOnly)
+        fn_ms = fn[0]
+        data = gdal.Open(fn_ms, gdal.GA_ReadOnly)
         georef = np.array(data.GetGeoTransform())
         bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
-        im10 = np.stack(bands, 2)
-        im10 = im10/10000 # TOA scaled to 10000
+        im_ms = np.stack(bands, 2)
+        im_ms = im_ms/10000 # TOA scaled to 10000
 
+        # image size
+        nrows = im_ms.shape[0]
+        ncols = im_ms.shape[1]
         # if image contains only zeros (can happen with S2), skip the image
-        if sum(sum(sum(im10))) < 1:
+        if sum(sum(sum(im_ms))) < 1:
             im_ms = []
             georef = []
             # skip the image by giving it a full cloud_mask
-            cloud_mask = np.ones((im10.shape[0],im10.shape[1])).astype('bool')
+            cloud_mask = np.ones((nrows,ncols)).astype('bool')
             return im_ms, georef, cloud_mask, [], [], []
 
-        # size of 10m bands
-        nrows = im10.shape[0]
-        ncols = im10.shape[1]
-
         # read 20m band (SWIR1)
-        fn20 = fn[1]
-        data = gdal.Open(fn20, gdal.GA_ReadOnly)
+        fn_swir = fn[1]
+        data = gdal.Open(fn_swir, gdal.GA_ReadOnly)
         bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
-        im20 = np.stack(bands, 2)
-        im20 = im20[:,:,0]
-        im20 = im20/10000 # TOA scaled to 10000
-
-        # resize the image using bilinear interpolation (order 1)
-        im_swir = transform.resize(im20, (nrows, ncols), order=1, preserve_range=True,
-                                   mode='constant')
+        im_swir = bands[0]
+        im_swir = im_swir/10000 # TOA scaled to 10000
         im_swir = np.expand_dims(im_swir, axis=2)
 
         # append down-sampled SWIR1 band to the other 10m bands
-        im_ms = np.append(im10, im_swir, axis=2)
+        im_ms = np.append(im_ms, im_swir, axis=2)
 
         # create cloud mask using 60m QA band (not as good as Landsat cloud cover)
-        fn60 = fn[2]
-        data = gdal.Open(fn60, gdal.GA_ReadOnly)
+        fn_mask = fn[2]
+        data = gdal.Open(fn_mask, gdal.GA_ReadOnly)
         bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
-        im60 = np.stack(bands, 2)
-        im_QA = im60[:,:,0]
+        im_QA = bands[0]
         cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
-        # resize the cloud mask using nearest neighbour interpolation (order 0)
-        cloud_mask = transform.resize(cloud_mask,(nrows, ncols), order=0, preserve_range=True,
-                                      mode='constant')
         # check if -inf or nan values on any band and create nodata image
         im_nodata = np.zeros(cloud_mask.shape).astype(bool)
         for k in range(im_ms.shape[2]):
@@ -264,22 +258,21 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         im_zeros = np.ones(im_nodata.shape).astype(bool)
         im_zeros = np.logical_and(np.isin(im_ms[:,:,1],0), im_zeros) # Green
         im_zeros = np.logical_and(np.isin(im_ms[:,:,3],0), im_zeros) # NIR
-        im_20_zeros = transform.resize(np.isin(im20,0),(nrows, ncols), order=0,
-                                       preserve_range=True, mode='constant').astype(bool)
-        im_zeros = np.logical_and(im_20_zeros, im_zeros) # SWIR1
+        im_zeros = np.logical_and(np.isin(im_ms[:,:,4],0), im_zeros) # SWIR
         # add to im_nodata
         im_nodata = np.logical_or(im_zeros, im_nodata)
         # dilate if image was merged as there could be issues at the edges
-        if 'merged' in fn10:
+        if 'merged' in fn_ms:
             im_nodata = morphology.dilation(im_nodata,morphology.square(5))
-
+            
         # update cloud mask with all the nodata pixels
         cloud_mask = np.logical_or(cloud_mask, im_nodata)
 
-        # the extra image is the 20m SWIR band
-        im_extra = im20
+        # no extra image
+        im_extra = []
 
     return im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata
+
 
 ###################################################################################################
 # AUXILIARY FUNCTIONS
@@ -307,7 +300,7 @@ def create_cloud_mask(im_QA, satname, cloud_mask_issue, collection):
     -----------
     cloud_mask : np.array
         boolean array with True if a pixel is cloudy and False otherwise
-
+        
     """
     if satname == 'S2':
         # 1024 = dense cloud, 2048 = cirrus clouds
@@ -363,12 +356,12 @@ def hist_match(source, template):
         array
     template: np.array
         Template image; can have different dimensions to source
-
+        
     Returns:
     -----------
     matched: np.array
         The transformed output image
-
+        
     """
 
     oldshape = source.shape
@@ -398,9 +391,9 @@ def hist_match(source, template):
 def pansharpen(im_ms, im_pan, cloud_mask):
     """
     Pansharpens a multispectral image, using the panchromatic band and a cloud mask.
-    A PCA is applied to the image, then the 1st PC is replaced, after histogram
+    A PCA is applied to the image, then the 1st PC is replaced, after histogram 
     matching with the panchromatic band. Note that it is essential to match the
-    histrograms of the 1st PC and the panchromatic band before replacing and
+    histrograms of the 1st PC and the panchromatic band before replacing and 
     inverting the PCA.
 
     KV WRL 2018
@@ -418,7 +411,7 @@ def pansharpen(im_ms, im_pan, cloud_mask):
     -----------
     im_ms_ps: np.ndarray
         Pansharpened multispectral image (3D)
-
+        
     """
     # check that cloud cover is not too high otherwise pansharpening fails
     if sum(sum(cloud_mask)) > 0.95*cloud_mask.shape[0]*cloud_mask.shape[1]:
@@ -444,6 +437,7 @@ def pansharpen(im_ms, im_pan, cloud_mask):
     im_ms_ps = vec_ms_ps_full.reshape(im_ms.shape[0], im_ms.shape[1], im_ms.shape[2])
 
     return im_ms_ps
+
 
 def rescale_image_intensity(im, cloud_mask, prob_high):
     """
@@ -505,7 +499,7 @@ def rescale_image_intensity(im, cloud_mask, prob_high):
 def create_jpg(im_ms, cloud_mask, date, satname, filepath, create_plot:bool=True):
     """
     Saves a .jpg file with the RGB image as well as the NIR and SWIR1 grayscale images.
-    This functions can be modified to obtain different visualisations of the
+    This functions can be modified to obtain different visualisations of the 
     multispectral images.
 
     KV WRL 2018
@@ -544,26 +538,26 @@ def create_jpg(im_ms, cloud_mask, date, satname, filepath, create_plot:bool=True
         ax1.imshow(im_RGB)
         ax1.set_title(date + '   ' + satname, fontsize=16)
 
-        # if im_RGB.shape[1] > 2*im_RGB.shape[0]:
-        #     ax1 = fig.add_subplot(311)
-        #     ax2 = fig.add_subplot(312)
-        #     ax3 = fig.add_subplot(313)
-        # else:
-        #     ax1 = fig.add_subplot(131)
-        #     ax2 = fig.add_subplot(132)
-        #     ax3 = fig.add_subplot(133)
-        # # RGB
-        # ax1.axis('off')
-        # ax1.imshow(im_RGB)
-        # ax1.set_title(date + '   ' + satname, fontsize=16)
-        # # NIR
-        # ax2.axis('off')
-        # ax2.imshow(im_NIR, cmap='seismic')
-        # ax2.set_title('Near Infrared', fontsize=16)
-        # # SWIR
-        # ax3.axis('off')
-        # ax3.imshow(im_SWIR, cmap='seismic')
-        # ax3.set_title('Short-wave Infrared', fontsize=16)
+    #    if im_RGB.shape[1] > 2*im_RGB.shape[0]:
+    #        ax1 = fig.add_subplot(311)
+    #        ax2 = fig.add_subplot(312)
+    #        ax3 = fig.add_subplot(313)
+    #    else:
+    #        ax1 = fig.add_subplot(131)
+    #        ax2 = fig.add_subplot(132)
+    #        ax3 = fig.add_subplot(133)
+    #    # RGB
+    #    ax1.axis('off')
+    #    ax1.imshow(im_RGB)
+    #    ax1.set_title(date + '   ' + satname, fontsize=16)
+    #    # NIR
+    #    ax2.axis('off')
+    #    ax2.imshow(im_NIR, cmap='seismic')
+    #    ax2.set_title('Near Infrared', fontsize=16)
+    #    # SWIR
+    #    ax3.axis('off')
+    #    ax3.imshow(im_SWIR, cmap='seismic')
+    #    ax3.set_title('Short-wave Infrared', fontsize=16)
 
         # save figure
         fig.savefig(os.path.join(filepath, date + '_' + satname + '.jpg'), dpi=150)
@@ -607,7 +601,7 @@ def save_jpg(metadata, settings, **kwargs):
         'inputs': dict
             input parameters (sitename, filepath, polygon, dates, sat_list)
         'cloud_thresh': float
-            value between 0 and 1 indicating the maximum cloud fraction in
+            value between 0 and 1 indicating the maximum cloud fraction in 
             the cropped image that is accepted
         'cloud_mask_issue': boolean
             True if there is an issue with the cloud mask and sand pixels
@@ -620,7 +614,7 @@ def save_jpg(metadata, settings, **kwargs):
     Stores the images as .jpg in a folder named /preprocessed
 
     """
-
+    
     sitename = settings['inputs']['sitename']
     cloud_thresh = settings['cloud_thresh']
     filepath_data = settings['inputs']['filepath']
@@ -676,7 +670,7 @@ def save_jpg(metadata, settings, **kwargs):
 def get_reference_sl(metadata, settings):
     """
     Allows the user to manually digitize a reference shoreline that is used seed
-    the shoreline detection algorithm. The reference shoreline helps to detect
+    the shoreline detection algorithm. The reference shoreline helps to detect 
     the outliers, making the shoreline detection more robust.
 
     KV WRL 2018
@@ -689,7 +683,7 @@ def get_reference_sl(metadata, settings):
         'inputs': dict
             input parameters (sitename, filepath, polygon, dates, sat_list)
         'cloud_thresh': float
-            value between 0 and 1 indicating the maximum cloud fraction in
+            value between 0 and 1 indicating the maximum cloud fraction in 
             the cropped image that is accepted
         'cloud_mask_issue': boolean
             True if there is an issue with the cloud mask and sand pixels
@@ -700,7 +694,7 @@ def get_reference_sl(metadata, settings):
     Returns:
     -----------
     reference_shoreline: np.array
-        coordinates of the reference shoreline that was manually digitized.
+        coordinates of the reference shoreline that was manually digitized. 
         This is also saved as a .pkl and .geojson file.
 
     """
@@ -730,7 +724,7 @@ def get_reference_sl(metadata, settings):
     elif 'L5' in metadata.keys(): satname = 'L5'
     # if only L7 images, ask user to download other images
     else:
-        raise Exception('You cannot digitize the shoreline on L7 images (because of gaps in the images), add another L8, S2 or L5 to your dataset.')
+            raise Exception('You cannot digitize the shoreline on L7 images (because of gaps in the images), add another L8, S2 or L5 to your dataset.')
     filepath = SDS_tools.get_filepath(settings['inputs'],satname)
     filenames = metadata[satname]['filenames']
     # if shoreline will not be shown to user do not open matplotlib window
@@ -741,7 +735,6 @@ def get_reference_sl(metadata, settings):
         mng.window.showMaximized()
     # loop trhough the images
     for i in range(len(filenames)):
-
         # read image
         fn = SDS_tools.get_filenames(filenames[i],filepath, satname)
         im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = preprocess_single(fn, satname, settings['cloud_mask_issue'],
@@ -752,24 +745,19 @@ def get_reference_sl(metadata, settings):
                                 (cloud_mask.shape[0]*cloud_mask.shape[1]))
         if cloud_cover_combined > 0.99: # if 99% of cloudy pixels in image skip
             continue
-
         # remove no data pixels from the cloud mask (for example L7 bands of no data should not be accounted for)
         cloud_mask_adv = np.logical_xor(cloud_mask, im_nodata)
         # compute updated cloud cover percentage (without no data pixels)
         cloud_cover = np.divide(sum(sum(cloud_mask_adv.astype(int))),
                                 (sum(sum((~im_nodata).astype(int)))))
-
         # skip image if cloud cover is above threshold
         if cloud_cover > settings['cloud_thresh']:
             continue
-
         # rescale image intensity for display purposes
         im_RGB = rescale_image_intensity(im_ms[:,:,[2,1,0]], cloud_mask, 99.9)
-
         # plot the image RGB on a figure
         ax.axis('off')
         ax.imshow(im_RGB)
-
         # decide if the image if good enough for digitizing the shoreline
         ax.set_title('Press <right arrow> if image is clear enough to digitize the shoreline.\n' +
                   'If the image is cloudy press <left arrow> to get another image', fontsize=14)
@@ -834,13 +822,11 @@ def get_reference_sl(metadata, settings):
                           'Start at one end of the beach.\n' + 'When finished digitizing, click <ENTER>',
                           fontsize=14)
                 plt.draw()
-
                 # let user click on the shoreline
                 pts = ginput(n=50000, timeout=-1, show_clicks=True)
                 pts_pix = np.array(pts)
                 # convert pixel coordinates to world coordinates
                 pts_world = SDS_tools.convert_pix2world(pts_pix[:,[1,0]], georef)
-
                 # interpolate between points clicked by the user (1m resolution)
                 pts_world_interp = np.expand_dims(np.array([np.nan, np.nan]),axis=0)
                 for k in range(len(pts_world)-1):
@@ -857,28 +843,23 @@ def get_reference_sl(metadata, settings):
                     tf = transform.EuclideanTransform(rotation=phi, translation=pts_world[k,:])
                     pts_world_interp = np.append(pts_world_interp,tf(pt_coords), axis=0)
                 pts_world_interp = np.delete(pts_world_interp,0,axis=0)
-
                 # save as geometry (to create .geojson file later)
                 geoms.append(geometry.LineString(pts_world_interp))
-
                 # convert to pixel coordinates and plot
                 pts_pix_interp = SDS_tools.convert_world2pix(pts_world_interp, georef)
                 pts_sl = np.append(pts_sl, pts_world_interp, axis=0)
                 ax.plot(pts_pix_interp[:,0], pts_pix_interp[:,1], 'r--')
                 ax.plot(pts_pix_interp[0,0], pts_pix_interp[0,1],'ko')
                 ax.plot(pts_pix_interp[-1,0], pts_pix_interp[-1,1],'ko')
-
                 # update title and buttons
                 add_button.set_visible(True)
                 end_button.set_visible(True)
                 ax.set_title('click on <add> to digitize another shoreline or on <end> to finish and save the shoreline(s)',
                           fontsize=14)
                 plt.draw()
-
                 # let the user click again (<add> another shoreline or <end>)
                 pt_input = ginput(n=1, timeout=-1, show_clicks=False)
                 pt_input = np.array(pt_input)
-
                 # if user clicks on <end>, save the points and break the loop
                 if pt_input[0][0] > im_ms.shape[1]/2:
                     add_button.set_visible(False)
@@ -888,17 +869,14 @@ def get_reference_sl(metadata, settings):
                     ginput(n=1, timeout=3, show_clicks=False)
                     plt.close()
                     break
-
             pts_sl = np.delete(pts_sl,0,axis=0)
             # convert world image coordinates to user-defined coordinate system
             image_epsg = metadata[satname]['epsg'][i]
             pts_coords = SDS_tools.convert_epsg(pts_sl, image_epsg, settings['output_epsg'])
-
             # save the reference shoreline as .pkl
             filepath = os.path.join(filepath_data, sitename)
             with open(os.path.join(filepath, sitename + '_reference_shoreline.pkl'), 'wb') as f:
                 pickle.dump(pts_coords, f)
-
             # also store as .geojson in case user wants to drag-and-drop on GIS for verification
             for k,line in enumerate(geoms):
                 gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(line))
@@ -915,13 +893,12 @@ def get_reference_sl(metadata, settings):
             # save as geojson
             gdf_all.to_file(os.path.join(filepath, sitename + '_reference_shoreline.geojson'),
                             driver='GeoJSON', encoding='utf-8')
-
             print('Reference shoreline has been saved in ' + filepath)
             break
-
+        
     # check if a shoreline was digitised
     if len(pts_coords) == 0:
         raise Exception('No cloud free images are available to digitise the reference shoreline,'+
-                        'download more images and try again')
-    
+                        'download more images and try again') 
+
     return pts_coords
