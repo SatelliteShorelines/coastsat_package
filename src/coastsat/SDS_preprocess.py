@@ -19,6 +19,7 @@ import sklearn.decomposition as decomposition
 import skimage.exposure as exposure
 from skimage.io import imsave
 from skimage import img_as_ubyte
+import skimage
 
 # other modules
 from osgeo import gdal
@@ -581,11 +582,11 @@ def create_jpg(im_ms, cloud_mask, date, satname, filepath, create_plot:bool=True
                 os.mkdir(ext_filepath)
             fname=os.path.join(ext_filepath, date + '_'+ext+'_' + satname + '.jpg')
             if ext == "RGB":
-                imsave(fname, im_RGB)
+                imsave(fname, im_RGB,dpi=(150,150))
             if ext == "SWIR":
-                imsave(fname, im_SWIR)
+                imsave(fname, im_SWIR,dpi=(150,150))
             if ext == "NIR":
-                imsave(fname, im_NIR)
+                imsave(fname, im_NIR,dpi=(150,150))
 
 def save_jpg(metadata, settings, **kwargs):
     """
@@ -727,12 +728,10 @@ def get_reference_sl(metadata, settings):
             raise Exception('You cannot digitize the shoreline on L7 images (because of gaps in the images), add another L8, S2 or L5 to your dataset.')
     filepath = SDS_tools.get_filepath(settings['inputs'],satname)
     filenames = metadata[satname]['filenames']
-    # if shoreline will not be shown to user do not open matplotlib window
-    if settings['check_detection'] == False:
-        # create figure
-        fig, ax = plt.subplots(1,1, figsize=[18,9], tight_layout=True)
-        mng = plt.get_current_fig_manager()
-        mng.window.showMaximized()
+
+     # create figure
+    fig, ax = plt.subplots(1,1, figsize=[18,9], tight_layout=True)
+    mng = plt.get_current_fig_manager()
     # loop trhough the images
     for i in range(len(filenames)):
         # read image

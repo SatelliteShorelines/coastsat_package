@@ -110,7 +110,6 @@ def label_images(metadata,settings):
     fig,ax = plt.subplots(1,1,figsize=[17,10], tight_layout=True,sharex=True,
                           sharey=True)
     mng = plt.get_current_fig_manager()                                         
-    mng.window.showMaximized()
 
     # loop through satellites
     for satname in metadata.keys():
