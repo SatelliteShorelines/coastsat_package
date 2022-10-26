@@ -733,10 +733,12 @@ def get_reference_sl(metadata, settings):
         raise Exception('You cannot digitize the shoreline on L7 images (because of gaps in the images), add another L8, S2 or L5 to your dataset.')
     filepath = SDS_tools.get_filepath(settings['inputs'],satname)
     filenames = metadata[satname]['filenames']
-    # create figure
-    fig, ax = plt.subplots(1,1, figsize=[18,9], tight_layout=True)
-    mng = plt.get_current_fig_manager()
-    mng.window.showMaximized()
+    # if shoreline will not be shown to user do not open matplotlib window
+    if settings['check_detection'] == False:
+        # create figure
+        fig, ax = plt.subplots(1,1, figsize=[18,9], tight_layout=True)
+        mng = plt.get_current_fig_manager()
+        mng.window.showMaximized()
     # loop trhough the images
     for i in range(len(filenames)):
 
