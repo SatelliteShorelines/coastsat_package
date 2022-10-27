@@ -1,5 +1,5 @@
 # CoastSat_Package Repo
-:warning: This package is still under active development :warning:
+This package is still under active development
 
 ## Install CoastSat with Pip
 [PyPi Repo](https://pypi.org/project/coastsat-package/)
@@ -54,7 +54,7 @@ CoastSat is an open-source software toolkit written in Python that enables users
 - Satellite-derived shorelines along meso-macrotidal beaches: https://doi.org/10.1016/j.geomorph.2021.107707
 - Beach-face slope dataset for Australia: https://doi.org/10.5194/essd-14-1345-2022
 
-:point_right: Other repositories and addons related to this toolbox:
+Other repositories and addons related to this toolbox:
 - [CoastSat.slope](https://github.com/kvos/CoastSat.slope): estimates the beach-face slope from the satellite-derived shorelines obtained with CoastSat.
 - [CoastSat.PlanetScope](https://github.com/ydoherty/CoastSat.PlanetScope): shoreline extraction for PlanetScope Dove imagery (near-daily since 2017 at 3m resolution).
 - [InletTracker](https://github.com/VHeimhuber/InletTracker): monitoring of intermittent open/close estuary entrances.
@@ -62,22 +62,22 @@ CoastSat is an open-source software toolkit written in Python that enables users
 - [CoastSeg](https://github.com/dbuscombe-usgs/CoastSeg): image segmentation, deep learning, doodler.
 - [CoastSat.Maxar](https://github.com/kvos/CoastSat.Maxar): shoreline extraction on Maxar World-View images (in progress)
 
-:point_right: Visit the [CoastSat website](http://coastsat.wrl.unsw.edu.au/) to explore and download regional-scale datasets of satellite-derived shorelines and beach slopes generated with CoastSat.
+Visit the [CoastSat website](http://coastsat.wrl.unsw.edu.au/) to explore and download regional-scale datasets of satellite-derived shorelines and beach slopes generated with CoastSat.
 
-:star: **If you like the repo put a star on it!** :star:
+**If you like the repo put a star on it!** :star:
 
 ### Latest updates
 
-:arrow_forward: *(2022/08/01)*
+*(2022/08/01)*
 CoastSat 2.0 (major release):
 + new download function for Landsat images (better alignment between panchromatic and multispectral bands)
 + quality-control steps added for fully automated shoreline extraction
 + post-processing of the shorelne time-series, including despiking and computing seasonal-averages.
 
-:arrow_forward: *(2022/07/20)*
+*(2022/07/20)*
 Option to switch off panchromatic sharpening on Landsat 7, 8 and 9 imagery.
 
-:arrow_forward: *(2022/05/02)*
+*(2022/05/02)*
 Compatibility with Landsat 9 and Landsat Collection 2
 
 ### Project description
