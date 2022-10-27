@@ -582,7 +582,6 @@ def create_jpg(im_ms, cloud_mask, date, satname, filepath, create_plot:bool=True
                 os.mkdir(ext_filepath)
             fname=os.path.join(ext_filepath, date + '_'+ext+'_' + satname + '.jpg')
         if ext == "RGB":
-
             imsave(fname, im_RGB,dpi=(150,150))
         if ext == "SWIR":
             imsave(fname, im_SWIR,dpi=(150,150))
