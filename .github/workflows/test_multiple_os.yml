@@ -17,20 +17,20 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         env:
-          - ci/envs/39-coastsat.yaml
-          - ci/envs/38-coastsat.yaml
+          - ci/envs/39-coastsat.yml
+          - ci/envs/38-coastsat.yml
         include:
-          - env: ci/envs/39-coastsat.yaml
+          - env: ci/envs/39-coastsat.yml
             os: macos-latest
-          - env: ci/envs/39-coastsat.yaml
+          - env: ci/envs/39-coastsat.yml
             os: windows-latest
-          - env: ci/envs/39-coastsat.yaml
+          - env: ci/envs/39-coastsat.yml
             os: ubuntu-latest
-          - env: ci/envs/38-coastsat.yaml
+          - env: ci/envs/38-coastsat.yml
             os: macos-latest
-          - env: ci/envs/38-coastsat.yaml
+          - env: ci/envs/38-coastsat.yml
             os: windows-latest
-          - env: ci/envs/38-coastsat.yaml
+          - env: ci/envs/38-coastsat.yml
             os: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
