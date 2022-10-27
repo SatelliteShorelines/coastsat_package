@@ -33,9 +33,6 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 
-[tool.setuptools.dynamic]
-readme = {file = ["README.md"]}
-
 [project.urls]
 "Homepage" = "https://github.com/kvos/CoastSat"
 "Bug Tracker" = "https://github.com/kvos/CoastSat/issues"
