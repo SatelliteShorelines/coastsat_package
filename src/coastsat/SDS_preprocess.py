@@ -19,7 +19,6 @@ import sklearn.decomposition as decomposition
 import skimage.exposure as exposure
 from skimage.io import imsave
 from skimage import img_as_ubyte
-import skimage
 
 # other modules
 from osgeo import gdal
@@ -127,12 +126,13 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         
         # no extra image for Landsat 5 (they are all 30 m bands)
         im_extra = []
-
+=======
         # read cloud mask
         data = gdal.Open(fn_mask, gdal.GA_ReadOnly)
         bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
         im_QA = bands[0]
         cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
+>>>>>>> 4773e87f805056652698f46a97129b16f487c51e
 
     #=============================================================================================#
     # L7, L8 and L9 images
@@ -497,7 +497,7 @@ def rescale_image_intensity(im, cloud_mask, prob_high):
 
     return im_adj
 
-def create_jpg(im_ms, cloud_mask, date, satname, filepath, create_plot:bool=True):
+def create_jpg(im_ms, cloud_mask, date, satname, filepath):
     """
     Saves a .jpg file with the RGB image as well as the NIR and SWIR1 grayscale images.
     This functions can be modified to obtain different visualisations of the 
@@ -515,78 +515,35 @@ def create_jpg(im_ms, cloud_mask, date, satname, filepath, create_plot:bool=True
         string containing the date at which the image was acquired
     satname: str
         name of the satellite mission (e.g., 'L5')
-    create_plot: bool
-        create a matplot lib containing the image with the datatime as the title
 
     Returns:
     -----------
         Saves a .jpg image corresponding to the preprocessed satellite image
 
     """
-    
-    if create_plot == True:
-        # rescale image intensity for display purposes
-        im_RGB = rescale_image_intensity(im_ms[:,:,[2,1,0]], cloud_mask, 99.9)
-        # im_NIR = rescale_image_intensity(im_ms[:,:,3], cloud_mask, 99.9)
-        # im_SWIR = rescale_image_intensity(im_ms[:,:,4], cloud_mask, 99.9)
-
-        # make figure (just RGB)
-        fig = plt.figure()
-        fig.set_size_inches([18,9])
-        fig.set_tight_layout(True)
-        ax1 = fig.add_subplot(111)
-        ax1.axis('off')
-        ax1.imshow(im_RGB)
-        ax1.set_title(date + '   ' + satname, fontsize=16)
-
-    #    if im_RGB.shape[1] > 2*im_RGB.shape[0]:
-    #        ax1 = fig.add_subplot(311)
-    #        ax2 = fig.add_subplot(312)
-    #        ax3 = fig.add_subplot(313)
-    #    else:
-    #        ax1 = fig.add_subplot(131)
-    #        ax2 = fig.add_subplot(132)
-    #        ax3 = fig.add_subplot(133)
-    #    # RGB
-    #    ax1.axis('off')
-    #    ax1.imshow(im_RGB)
-    #    ax1.set_title(date + '   ' + satname, fontsize=16)
-    #    # NIR
-    #    ax2.axis('off')
-    #    ax2.imshow(im_NIR, cmap='seismic')
-    #    ax2.set_title('Near Infrared', fontsize=16)
-    #    # SWIR
-    #    ax3.axis('off')
-    #    ax3.imshow(im_SWIR, cmap='seismic')
-    #    ax3.set_title('Short-wave Infrared', fontsize=16)
-
-        # save figure
-        fig.savefig(os.path.join(filepath, date + '_' + satname + '.jpg'), dpi=150)
-        plt.close()
-    elif create_plot == False:
-        # rescale image intensity for display purposes
-        im_RGB = rescale_image_intensity(im_ms[:,:,[2,1,0]], cloud_mask, 99.9)
-        im_NIR = rescale_image_intensity(im_ms[:,:,3], cloud_mask, 99.9)
-        im_SWIR = rescale_image_intensity(im_ms[:,:,4], cloud_mask, 99.9)
-
-        im_RGB = img_as_ubyte(im_RGB)
-        im_NIR = img_as_ubyte(im_NIR)
-        im_SWIR = img_as_ubyte(im_SWIR)
-
-        # Save the image with skimage.io
-        file_types=["RGB","SWIR","NIR"]
-        for ext in file_types:
-
-            ext_filepath=filepath+os.sep+ext
-            if not os.path.exists(ext_filepath):
-                os.mkdir(ext_filepath)
-            fname=os.path.join(ext_filepath, date + '_'+ext+'_' + satname + '.jpg')
+    # rescale image intensity for display purposes
+    im_RGB = rescale_image_intensity(im_ms[:,:,[2,1,0]], cloud_mask, 99.9)
+    im_NIR = rescale_image_intensity(im_ms[:,:,3], cloud_mask, 99.9)
+    im_SWIR = rescale_image_intensity(im_ms[:,:,4], cloud_mask, 99.9)
+    # convert images to bytes so they can be saved
+    im_RGB = img_as_ubyte(im_RGB)
+    im_NIR = img_as_ubyte(im_NIR)
+    im_SWIR = img_as_ubyte(im_SWIR)
+    # Save each kind of image with skimage.io
+    file_types=["RGB","SWIR","NIR"]
+    # create folders RGB, SWIR, and NIR to hold each type of image
+    for ext in file_types:
+        ext_filepath=filepath+os.sep+ext
+        if not os.path.exists(ext_filepath):
+            os.mkdir(ext_filepath)
+        # location to save image ex. rgb image would be in sitename/RGB/sitename.jpg
+        fname=os.path.join(ext_filepath, date + '_'+ext+'_' + satname + '.jpg')
         if ext == "RGB":
-            imsave(fname, im_RGB,dpi=(150,150))
+            imsave(fname, im_RGB, quality=100)
         if ext == "SWIR":
-            imsave(fname, im_SWIR,dpi=(150,150))
+            imsave(fname, im_SWIR, quality=100)
         if ext == "NIR":
-            imsave(fname, im_NIR,dpi=(150,150))
+            imsave(fname, im_NIR, quality=100)
 
 def save_jpg(metadata, settings, **kwargs):
     """
@@ -607,23 +564,17 @@ def save_jpg(metadata, settings, **kwargs):
         'cloud_mask_issue': boolean
             True if there is an issue with the cloud mask and sand pixels
             are erroneously being masked on the images
-        'create_plot': boolean
-            True create a matplotlib plot of the image with the datetime as the title
-            False save as a standard JPG
+            
     Returns:
     -----------
     Stores the images as .jpg in a folder named /preprocessed
-
+    
     """
     
     sitename = settings['inputs']['sitename']
     cloud_thresh = settings['cloud_thresh']
     filepath_data = settings['inputs']['filepath']
     collection = settings['inputs']['landsat_collection']
-    # Create a matplotlib plot for each image
-    create_plot = True
-    if 'create_plot' in settings:
-        create_plot = settings['create_plot']
 
     # create subfolder to store the jpg files
     filepath_jpg = os.path.join(filepath_data, sitename, 'jpg_files', 'preprocessed')
@@ -633,6 +584,7 @@ def save_jpg(metadata, settings, **kwargs):
     # loop through satellite list
     print('Saving images as jpg:')
     for satname in metadata.keys():
+        
         filepath = SDS_tools.get_filepath(settings['inputs'],satname)
         filenames = metadata[satname]['filenames']
         print('%s: %d images'%(satname,len(filenames)))
@@ -662,7 +614,7 @@ def save_jpg(metadata, settings, **kwargs):
             # save .jpg with date and satellite in the title
             date = filenames[i][:19]
             plt.ioff()  # turning interactive plotting off
-            create_jpg(im_ms, cloud_mask, date, satname, filepath_jpg, create_plot)
+            create_jpg(im_ms, cloud_mask, date, satname, filepath_jpg)
         print('')
     # print the location where the images have been saved
     print('Satellite images saved as .jpg in ' + os.path.join(filepath_data, sitename,
@@ -713,7 +665,6 @@ def get_reference_sl(metadata, settings):
         with open(os.path.join(filepath, sitename + '_reference_shoreline.pkl'), 'rb') as f:
             refsl = pickle.load(f)
         return refsl
-
     # otherwise get the user to manually digitise a shoreline on 
     # S2, L8, L9 or L5 images (no L7 because of scan line error)
     # first try to use S2 images (10m res for manually digitizing the reference shoreline)
@@ -729,7 +680,7 @@ def get_reference_sl(metadata, settings):
     filepath = SDS_tools.get_filepath(settings['inputs'],satname)
     filenames = metadata[satname]['filenames']
 
-     # create figure
+    # create figure
     fig, ax = plt.subplots(1,1, figsize=[18,9], tight_layout=True)
     mng = plt.get_current_fig_manager()
     # loop trhough the images
@@ -798,7 +749,7 @@ def get_reference_sl(metadata, settings):
                 raise StopIteration('User cancelled checking shoreline detection')
             else:
                 plt.waitforbuttonpress()
-
+                
         if skip_image:
             ax.clear()
             continue
@@ -894,7 +845,7 @@ def get_reference_sl(metadata, settings):
                             driver='GeoJSON', encoding='utf-8')
             print('Reference shoreline has been saved in ' + filepath)
             break
-        
+
     # check if a shoreline was digitised
     if len(pts_coords) == 0:
         raise Exception('No cloud free images are available to digitise the reference shoreline,'+
