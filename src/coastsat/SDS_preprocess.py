@@ -126,13 +126,11 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         
         # no extra image for Landsat 5 (they are all 30 m bands)
         im_extra = []
-=======
         # read cloud mask
         data = gdal.Open(fn_mask, gdal.GA_ReadOnly)
         bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
         im_QA = bands[0]
         cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
->>>>>>> 4773e87f805056652698f46a97129b16f487c51e
 
     #=============================================================================================#
     # L7, L8 and L9 images
