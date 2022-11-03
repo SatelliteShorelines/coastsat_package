@@ -1,6 +1,6 @@
 on:
   push:
-    branches: [master,update/coastat_save_jpgs]
+    branches: [master]
   pull_request:
     branches: [master]
 
