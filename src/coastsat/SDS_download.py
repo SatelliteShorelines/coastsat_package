@@ -28,6 +28,7 @@ import pytz
 import pickle
 from skimage import morphology, transform
 from scipy import ndimage
+from tqdm import tqdm
 
 # CoastSat modules
 from coastsat import SDS_preprocess, SDS_tools, gdal_merge
@@ -114,11 +115,18 @@ def retrieve_images(inputs):
                   'S2':['B2','B3','B4','B8','B11','QA60']}
     
     # main loop to download the images for each satellite mission
-    print('\nDownloading images:')
+    # print('\nDownloading images:')
     suffix = '.tif'
-    for satname in im_dict_T1.keys():
+    count=1
+    num_satellites = len(im_dict_T1.keys())
+    for satname in tqdm(im_dict_T1.keys(),
+        desc=f'Downloading Imagery for {num_satellites} satellites',
+        position=count,
+        leave=True):
+        count+=1
+    # for satname in im_dict_T1.keys():
         
-        print('%s: %d images'%(satname,len(im_dict_T1[satname])))
+        # print('%s: %d images'%(satname,len(im_dict_T1[satname])))
         
         # create subfolder structure to store the different bands
         filepaths = SDS_tools.create_folder_structure(im_folder, satname)
@@ -127,7 +135,9 @@ def retrieve_images(inputs):
         bands_id = bands_dict[satname]
         
         # loop through each image
-        for i in range(len(im_dict_T1[satname])):
+        for i in tqdm(range(len(im_dict_T1[satname])),
+        desc=f'Downloading Imagery for {satname}',
+        leave=True):
             
             # get image metadata
             im_meta = im_dict_T1[satname][i]
@@ -391,9 +401,9 @@ def retrieve_images(inputs):
                 for key in metadict.keys():
                     f.write('%s\t%s\n'%(key,metadict[key]))
             # print percentage completion for user
-            print('\r%d%%' %int((i+1)/len(im_dict_T1[satname])*100), end='')
+            # print('\r%d%%' %int((i+1)/len(im_dict_T1[satname])*100), end='')
 
-        print('')
+        # print('')
 
     # once all images have been downloaded, load metadata from .txt files
     metadata = get_metadata(inputs)

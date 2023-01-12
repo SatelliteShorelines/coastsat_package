@@ -32,6 +32,7 @@ from matplotlib import gridspec
 import pickle
 from datetime import datetime
 from pylab import ginput
+from tqdm import tqdm
 
 # CoastSat modules
 from coastsat import SDS_tools, SDS_preprocess
@@ -111,7 +112,7 @@ def extract_shorelines(metadata, settings):
     # close all open figures
     plt.close('all')
 
-    print('Mapping shorelines:')
+    # print('Mapping shorelines:')
 
     default_min_length_sl = settings['min_length_sl']
     # loop through satellite list
@@ -155,9 +156,11 @@ def extract_shorelines(metadata, settings):
         else: settings['min_length_sl'] = default_min_length_sl
         
         # loop through the images
-        for i in range(len(filenames)):
+        for i in tqdm(range(len(filenames)), desc='Mapping Shorelines',
+        leave=True,
+        position=0):
 
-            print('\r%s:   %d%%' % (satname,int(((i+1)/len(filenames))*100)), end='')
+            # print('\r%s:   %d%%' % (satname,int(((i+1)/len(filenames))*100)), end='')
 
             # get image filename
             fn = SDS_tools.get_filenames(filenames[i],filepath, satname)
@@ -215,7 +218,7 @@ def extract_shorelines(metadata, settings):
                         # use classification to refine threshold and extract the sand/water interface
                         contours_mwi, t_mndwi = find_wl_contours2(im_ms, im_labels, cloud_mask, im_ref_buffer)
                 except:
-                    print('Could not map shoreline for this image: ' + filenames[i])
+                    print('\nCould not map shoreline for this image: ' + filenames[i])
                     continue
     
                 # process the water contours into a shoreline
@@ -254,7 +257,7 @@ def extract_shorelines(metadata, settings):
                 'idx': output_idxkeep,
                 'MNDWI_threshold': output_t_mndwi,
                 }
-        print('')
+        # print('')
 
     # close figure window if still open
     if plt.get_fignums():

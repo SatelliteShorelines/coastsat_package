@@ -12,7 +12,7 @@ where = ["src"]
 [project]
 name = "coastsat_package"
 dynamic = ["readme"]
-version = "0.1.1"
+version = "0.1.2"
 authors = [
   { name="Kilian Vos & Sharon Fitzpatrick" },
 ]
@@ -22,6 +22,7 @@ dependencies = [ "scikit-image",
  "earthengine-api>=0.1.304",
   "matplotlib",
   "astropy",
+  "tqdm",
   "importlib-resources",
   "pyqt5",
   "scipy",
