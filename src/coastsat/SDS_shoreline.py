@@ -10,7 +10,6 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import pdb
-import importlib.resources
 
 # image processing modules
 import skimage.filters as filters
@@ -92,18 +91,16 @@ def extract_shorelines(metadata, settings):
         contains the extracted shorelines and corresponding dates + metadata
 
     """
+    try:
+        import importlib.resources
+        filepath_models = os.path.abspath(importlib.resources.files(models))
+    except AttributeError:
+        from importlib_resources import files
+        filepath_models = os.path.abspath(files(models))
 
     sitename = settings['inputs']['sitename']
     filepath_data = settings['inputs']['filepath']
     collection = settings['inputs']['landsat_collection']
-    # filepath_models = os.path.join(os.getcwd(), 'classification', 'models')
-    # @todo test new imports
-    filepath_models = os.path.abspath(importlib.resources.files(models))
-    # filepath_models=""
-    # with importlib.resources.as_file(importlib.resources.files('classification').joinpath('models')) as f:
-    #     print(f)
-    #     filepath_models=os.path.abspath(f)
-    # model_paths = list(os.path.abspath(resource) for resource in importlib.resources.files(models).iterdir() if resource.is_file())
 
     # initialise output structure
     output = dict([])
