@@ -32,7 +32,8 @@ from matplotlib import gridspec
 import pickle
 from datetime import datetime
 from pylab import ginput
-from tqdm import tqdm
+# from tqdm import tqdm
+from tqdm.auto import tqdm
 
 # CoastSat modules
 from coastsat import SDS_tools, SDS_preprocess

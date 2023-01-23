@@ -693,6 +693,9 @@ def output_to_gdf(output, geomtype):
         else:
             # save the geometry depending on the linestyle
             if geomtype == 'lines':
+                # linestrings must consist of 2 or more points
+                if len(output['shorelines'][i]) < 2:
+                    continue
                 geom = geometry.LineString(output['shorelines'][i])
             elif geomtype == 'points':
                 coords = output['shorelines'][i]

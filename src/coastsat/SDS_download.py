@@ -28,7 +28,9 @@ import pytz
 import pickle
 from skimage import morphology, transform
 from scipy import ndimage
-from tqdm import tqdm
+# from tqdm import tqdm
+from tqdm.auto import tqdm
+
 
 # CoastSat modules
 from coastsat import SDS_preprocess, SDS_tools, gdal_merge
@@ -120,9 +122,9 @@ def retrieve_images(inputs):
     count=1
     num_satellites = len(im_dict_T1.keys())
     for satname in tqdm(im_dict_T1.keys(),
-        desc=f'Downloading Imagery for {num_satellites} satellites',
-        position=count,
-        leave=True):
+        desc=f'Downloading Imagery for {num_satellites} satellites'):
+        # position=count,
+        # leave=True):
         count+=1
     # for satname in im_dict_T1.keys():
         
