@@ -177,7 +177,8 @@ def retrieve_images(inputs):
                 else: 
                     acc_georef = -1
                 # add additional metadata for Sharon's Sniffer ['PASSED' or 'FAILED']
-                im_quality.append(im_meta['properties']['RADIOMETRIC_QUALITY'])
+                if 'RADIOMETRIC_QUALITY' in im_meta['properties'].keys():
+                    im_quality.append(im_meta['properties']['RADIOMETRIC_QUALITY'])
             georef_accs.append(acc_georef)
 
             # download the images as .tif files
