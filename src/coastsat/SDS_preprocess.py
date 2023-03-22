@@ -333,13 +333,13 @@ def create_cloud_mask(im_QA, satname, cloud_mask_issue, collection):
     # remove cloud pixels that form very thin features. These are beach or swash pixels that are
     # erroneously identified as clouds by the CFMASK algorithm applied to the images by the USGS.
     if sum(sum(cloud_mask)) > 0 and sum(sum(~cloud_mask)) > 0:
-        morphology.remove_small_objects(cloud_mask, min_size=40, connectivity=1, in_place=True)
+        morphology.remove_small_objects(cloud_mask, min_size=40, connectivity=1, out=cloud_mask)
 
         if cloud_mask_issue:
             elem = morphology.square(6) # use a square of width 6 pixels
             cloud_mask = morphology.binary_opening(cloud_mask,elem) # perform image opening
             # remove objects with less than 25 connected pixels
-            morphology.remove_small_objects(cloud_mask, min_size=100, connectivity=1, in_place=True)
+            morphology.remove_small_objects(cloud_mask, min_size=100, connectivity=1, out=cloud_mask)
 
     return cloud_mask
 
