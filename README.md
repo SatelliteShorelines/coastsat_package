@@ -11,7 +11,7 @@ This package is still under active development
 	>`conda activate coastsat_pkg `
 3. Install jupyter and geopandas with Conda using the conda forge channel
 	- [Geopandas](https://geopandas.org/en/stable/) has [GDAL](https://gdal.org/) as a dependency so its best to install it with conda.
-	>`conda install -c conda-forge jupyter geopandas -y`
+	>`conda install -c conda-forge geopandas jupyterlab -y`
 4. Install pip in your conda environment
 - We will use pip to install the coastsat package from [PyPi](https://pypi.org/)
 	>  `conda install pip -y`
