@@ -59,6 +59,7 @@ def retry(func):
                     time.sleep(1)
     return wrapper
 
+
 def get_image_quality(satname:str, im_meta:dict)->str:
     """
     Get the image quality for a given satellite name and image metadata.
@@ -228,237 +229,248 @@ def retrieve_images(inputs,cloud_threshold:float=99.9,cloud_mask_issue:bool=Fals
     num_satellites = len(im_dict_T1.keys())
     for satname in tqdm(im_dict_T1.keys(),
         desc=f'Downloading Imagery for {num_satellites} satellites'):
-
-        count+=1
-        # create subfolder structure to store the different bands
-        filepaths = SDS_tools.create_folder_structure(im_folder, satname)
-        # initialise variables and loop through images
-        georef_accs = []; all_names = []; im_epsg = []; im_quality = [];
-        bands_id = bands_dict[satname]
-        
-        # loop through each image
-        for i in tqdm(range(len(im_dict_T1[satname])),
-        desc=f'Downloading Imagery for {satname}',
-        leave=True):
+        try:
+            count+=1
+            # create subfolder structure to store the different bands
+            filepaths = SDS_tools.create_folder_structure(im_folder, satname)
+            # initialise variables and loop through images
+            georef_accs = []; all_names = []; im_epsg = []; im_quality = [];
+            bands_id = bands_dict[satname]
             
-            # get image metadata
-            im_meta = im_dict_T1[satname][i]
-
-            # get time of acquisition (UNIX time) and convert to datetime
-            acquisition_time = im_meta['properties']['system:time_start']
-            im_timestamp = datetime.fromtimestamp(acquisition_time/1000, tz=pytz.utc)
-            im_date = im_timestamp.strftime('%Y-%m-%d-%H-%M-%S')
-
-            # get epsg code
-            im_epsg.append(int(im_meta['bands'][0]['crs'][5:]))
-            
-            # get geometric accuracy and image quality
-            accuracy_georef = get_georeference_accuracy(satname, im_meta)
-            image_quality = get_image_quality(satname, im_meta)
-            im_quality.append(image_quality)
-            georef_accs.append(accuracy_georef)
-
-
-            # download the images as .tif files
-            bands = dict([])
-            im_fn = dict([])
-            # first delete dimensions key from dictionnary
-            # otherwise the entire image is extracted (don't know why)
-            im_bands = im_meta['bands']
-            for j in range(len(im_bands)): del im_bands[j]['dimensions']
-            # get image id
-            image_ee = ee.Image(im_meta['id'])
-            
-            #=============================================================================================#
-            # Landsat 5 download
-            #=============================================================================================#
-            if satname == 'L5':
-                fp_ms = filepaths[1]
-                fp_mask = filepaths[2] 
-                # select multispectral bands
-                bands['ms'] = [im_bands[_] for _ in range(len(im_bands)) if im_bands[_]['id'] in bands_id]
-                # adjust polygon to match image coordinates so that there is no resampling
-                proj = image_ee.select('B1').projection()
-                ee_region = adjust_polygon(inputs['polygon'],proj)
-                # download .tif from EE (one file with ms bands and one file with QA band)
-                fn_ms, fn_QA = download_tif(image_ee,ee_region,bands['ms'],fp_ms,satname) 
-                # create filename for image
-                for key in bands.keys():
-                    im_fn[key] = im_date + '_' + satname + '_' + inputs['sitename'] + '_' + key + suffix
-                # if multiple images taken at the same date add 'dupX' to the name (duplicate number X)
-                im_fn = handle_duplicate_image_names(all_names,bands,im_fn,im_date,satname,inputs['sitename'],suffix)
-                im_fn['mask'] = im_fn['ms'].replace('_ms','_mask')
-                all_names.append(im_fn['ms'])
+            # loop through each image
+            for i in tqdm(range(len(im_dict_T1[satname])),
+            desc=f'Downloading Imagery for {satname}',
+            leave=True):
                 
-                # resample ms bands to 15m with bilinear interpolation
-                fn_in = fn_ms
-                fn_target = fn_ms
-                fn_out = os.path.join(fp_ms, im_fn['ms'])
-                warp_image_to_target(fn_in,fn_out,fn_target,double_res=True,resampling_method='bilinear')                
-                
-                # resample QA band to 15m with nearest-neighbour interpolation
-                fn_in = fn_QA
-                fn_target = fn_QA
-                fn_out = os.path.join(fp_mask, im_fn['mask'])
-                warp_image_to_target(fn_in,fn_out,fn_target,double_res=True,resampling_method='near')
-                
-                # delete original downloads
-                for _ in [fn_ms,fn_QA]: os.remove(_)
-                
-                # add metadata in .txt file (save at the end of the loop)
-                filename_txt = im_fn['ms'].replace('_ms','').replace('.tif','')
-                metadict = {'filename':im_fn['ms'],'acc_georef':georef_accs[i],
-                            'epsg':im_epsg[i],'image_quality':im_quality[i]}
-                
-               
-                filename = im_fn['ms']
-                tif_paths= SDS_tools.get_filepath(inputs,satname)
+                # get image metadata
+                im_meta = im_dict_T1[satname][i]
 
-                new_SDS_preprocess.save_single_jpg(filename = im_fn['ms'],
-                                                   tif_paths = tif_paths,
-                                                   satname=satname,
-                                                   sitename=inputs['sitename'],
-                                                   cloud_thresh=cloud_threshold,
-                                                   cloud_mask_issue=cloud_mask_issue,
-                                                   filepath_data=inputs['filepath'],
-                                                   collection=inputs['collection'],
-                                                   )
+                # get time of acquisition (UNIX time) and convert to datetime
+                acquisition_time = im_meta['properties']['system:time_start']
+                im_timestamp = datetime.fromtimestamp(acquisition_time/1000, tz=pytz.utc)
+                im_date = im_timestamp.strftime('%Y-%m-%d-%H-%M-%S')
 
-            #=============================================================================================#
-            # Landsat 7, 8 and 9 download
-            #=============================================================================================#
-            elif satname in ['L7', 'L8', 'L9']:
-                fp_ms = filepaths[1]
-                fp_pan = filepaths[2]
-                fp_mask = filepaths[3] 
-                # if C01 is selected, for images after 2022 adjust the name of the QA band 
-                # as the name has changed for Collection 2 images (from BQA to QA_PIXEL)
-                if inputs['landsat_collection'] == 'C01':
-                    if not 'BQA' in [_['id'] for _ in im_bands]:
-                        bands_id[-1] = 'QA_PIXEL'
-                # select bands (multispectral and panchromatic)
-                bands['ms'] = [im_bands[_] for _ in range(len(im_bands)) if im_bands[_]['id'] in bands_id]
-                bands['pan'] = [im_bands[_] for _ in range(len(im_bands)) if im_bands[_]['id'] in ['B8']]
-                # adjust polygon for both ms and pan bands
-                proj_ms = image_ee.select('B1').projection()
-                proj_pan = image_ee.select('B8').projection()
-                ee_region_ms = adjust_polygon(inputs['polygon'],proj_ms)
-                ee_region_pan = adjust_polygon(inputs['polygon'],proj_pan)
+                # get epsg code
+                im_epsg.append(int(im_meta['bands'][0]['crs'][5:]))
+                
+                # get geometric accuracy and image quality
+                accuracy_georef = get_georeference_accuracy(satname, im_meta)
+                image_quality = get_image_quality(satname, im_meta)
+                im_quality.append(image_quality)
+                georef_accs.append(accuracy_georef)
 
-                # download both ms and pan bands from EE
-                fn_ms, fn_QA = download_tif(image_ee,ee_region_ms,bands['ms'],fp_ms,satname)
-                fn_pan = download_tif(image_ee,ee_region_pan,bands['pan'],fp_pan,satname)
 
-                # create filename for both images (ms and pan)
-                for key in bands.keys():
-                    im_fn[key] = im_date + '_' + satname + '_' + inputs['sitename'] + '_' + key + suffix
+                # download the images as .tif files
+                bands = dict([])
+                im_fn = dict([])
+                # first delete dimensions key from dictionnary
+                # otherwise the entire image is extracted (don't know why)
+                im_bands = im_meta['bands']
+                for j in range(len(im_bands)): del im_bands[j]['dimensions']
+                # get image id
+                image_ee = ee.Image(im_meta['id'])
+                
+                #=============================================================================================#
+                # Landsat 5 download
+                #=============================================================================================#
+                if satname == 'L5':
+                    fp_ms = filepaths[1]
+                    fp_mask = filepaths[2] 
+                    # select multispectral bands
+                    bands['ms'] = [im_bands[_] for _ in range(len(im_bands)) if im_bands[_]['id'] in bands_id]
+                    # adjust polygon to match image coordinates so that there is no resampling
+                    proj = image_ee.select('B1').projection()
+                    ee_region = adjust_polygon(inputs['polygon'],proj)
+                    # download .tif from EE (one file with ms bands and one file with QA band)
+                    fn_ms, fn_QA = download_tif(image_ee,ee_region,bands['ms'],fp_ms,satname) 
+                    # create filename for image
+                    for key in bands.keys():
+                        im_fn[key] = im_date + '_' + satname + '_' + inputs['sitename'] + '_' + key + suffix
+                    # if multiple images taken at the same date add 'dupX' to the name (duplicate number X)
+                    im_fn = handle_duplicate_image_names(all_names,bands,im_fn,im_date,satname,inputs['sitename'],suffix)
+                    im_fn['mask'] = im_fn['ms'].replace('_ms','_mask')
+                    all_names.append(im_fn['ms'])
+                    
+                    # resample ms bands to 15m with bilinear interpolation
+                    fn_in = fn_ms
+                    fn_target = fn_ms
+                    fn_out = os.path.join(fp_ms, im_fn['ms'])
+                    warp_image_to_target(fn_in,fn_out,fn_target,double_res=True,resampling_method='bilinear')                
+                    
+                    # resample QA band to 15m with nearest-neighbour interpolation
+                    fn_in = fn_QA
+                    fn_target = fn_QA
+                    fn_out = os.path.join(fp_mask, im_fn['mask'])
+                    warp_image_to_target(fn_in,fn_out,fn_target,double_res=True,resampling_method='near')
+                    
+                    # delete original downloads
+                    for _ in [fn_ms,fn_QA]: os.remove(_)
+                    
+                    # add metadata in .txt file (save at the end of the loop)
+                    filename_txt = im_fn['ms'].replace('_ms','').replace('.tif','')
+                    metadict = {'filename':im_fn['ms'],'acc_georef':georef_accs[i],
+                                'epsg':im_epsg[i],'image_quality':im_quality[i]}
+                    
+                
+                    if save_jpg:
+                        tif_paths= SDS_tools.get_filepath(inputs,satname)
+                        SDS_preprocess.save_single_jpg(filename = im_fn['ms'],
+                                                        tif_paths = tif_paths,
+                                                        satname=satname,
+                                                        sitename=inputs['sitename'],
+                                                        cloud_thresh=cloud_threshold,
+                                                        cloud_mask_issue=cloud_mask_issue,
+                                                        filepath_data=inputs['filepath'],
+                                                        collection=inputs['landsat_collection'],
+                                                        )
+                    # write metadata
+                    with open(os.path.join(filepaths[0],filename_txt + '.txt'), 'w') as f:
+                        for key in metadict.keys():
+                            f.write('%s\t%s\n'%(key,metadict[key]))
 
-                # if multiple images taken at the same date add 'dupX' to the name (duplicate number X)
-                im_fn = handle_duplicate_image_names(all_names,bands,im_fn,im_date,satname,inputs['sitename'],suffix)
-                im_fn['mask'] = im_fn['ms'].replace('_ms','_mask')
-                all_names.append(im_fn['ms'])
-                
-                # resample the ms bands to the pan band with bilinear interpolation (for pan-sharpening later)
-                fn_in = fn_ms
-                fn_target = fn_pan
-                fn_out = os.path.join(fp_ms, im_fn['ms'])
-                warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method='bilinear')             
-                
-                # resample QA band to the pan band with nearest-neighbour interpolation
-                fn_in = fn_QA
-                fn_target = fn_pan
-                fn_out = os.path.join(fp_mask, im_fn['mask'])
-                warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method='near')
+                #=============================================================================================#
+                # Landsat 7, 8 and 9 download
+                #=============================================================================================#
+                elif satname in ['L7', 'L8', 'L9']:
+                    fp_ms = filepaths[1]
+                    fp_pan = filepaths[2]
+                    fp_mask = filepaths[3] 
+                    # if C01 is selected, for images after 2022 adjust the name of the QA band 
+                    # as the name has changed for Collection 2 images (from BQA to QA_PIXEL)
+                    if inputs['landsat_collection'] == 'C01':
+                        if not 'BQA' in [_['id'] for _ in im_bands]:
+                            bands_id[-1] = 'QA_PIXEL'
+                    # select bands (multispectral and panchromatic)
+                    bands['ms'] = [im_bands[_] for _ in range(len(im_bands)) if im_bands[_]['id'] in bands_id]
+                    bands['pan'] = [im_bands[_] for _ in range(len(im_bands)) if im_bands[_]['id'] in ['B8']]
+                    # adjust polygon for both ms and pan bands
+                    proj_ms = image_ee.select('B1').projection()
+                    proj_pan = image_ee.select('B8').projection()
+                    ee_region_ms = adjust_polygon(inputs['polygon'],proj_ms)
+                    ee_region_pan = adjust_polygon(inputs['polygon'],proj_pan)
 
-                # rename pan band
-                try:
-                    os.rename(fn_pan,os.path.join(fp_pan,im_fn['pan']))
-                except:
-                    os.remove(os.path.join(fp_pan,im_fn['pan']))
-                    os.rename(fn_pan,os.path.join(fp_pan,im_fn['pan']))  
-                # delete original downloads
-                for _ in [fn_ms,fn_QA]: os.remove(_)
-                
-                # metadata for .txt file
-                filename_txt = im_fn['ms'].replace('_ms','').replace('.tif','')
-                metadict = {'filename':im_fn['ms'],'acc_georef':georef_accs[i],
-                            'epsg':im_epsg[i],'image_quality':im_quality[i]}
+                    # download both ms and pan bands from EE
+                    fn_ms, fn_QA = download_tif(image_ee,ee_region_ms,bands['ms'],fp_ms,satname)
+                    fn_pan = download_tif(image_ee,ee_region_pan,bands['pan'],fp_pan,satname)
 
-                new_SDS_preprocess.save_single_jpg(filename = im_fn['ms'],
-                                       tif_paths = tif_paths,
-                                       satname=satname,
-                                       sitename=inputs['sitename'],
-                                       cloud_thresh=cloud_threshold,
-                                       cloud_mask_issue=cloud_mask_issue,
-                                       filepath_data=inputs['filepath'],
-                                       collection=inputs['collection'],
-                                       )
-            #=============================================================================================#
-            # Sentinel-2 download
-            #=============================================================================================#
-            elif satname in ['S2']:
-                fp_ms = filepaths[1]
-                fp_swir = filepaths[2]
-                fp_mask = filepaths[3]    
-                # select bands (10m ms RGB+NIR, 20m SWIR1, 60m QA band)
-                bands['ms'] = [im_bands[_] for _ in range(len(im_bands)) if im_bands[_]['id'] in bands_id[:4]]
-                bands['swir'] = [im_bands[_] for _ in range(len(im_bands)) if im_bands[_]['id'] in bands_id[4:5]]
-                bands['mask'] = [im_bands[_] for _ in range(len(im_bands)) if im_bands[_]['id'] in bands_id[-1:]]
-                # adjust polygon for both ms and pan bands
-                proj_ms = image_ee.select('B1').projection()
-                proj_swir = image_ee.select('B11').projection()
-                proj_mask = image_ee.select('QA60').projection()
-                ee_region_ms = adjust_polygon(inputs['polygon'],proj_ms)
-                ee_region_swir = adjust_polygon(inputs['polygon'],proj_swir)
-                ee_region_mask = adjust_polygon(inputs['polygon'],proj_mask)
-                # download the ms, swir and QA bands from EE    
-                fn_ms = download_tif(image_ee,ee_region_ms,bands['ms'],fp_ms,satname)
-                fn_swir = download_tif(image_ee,ee_region_swir,bands['swir'],fp_swir,satname)
-                fn_QA = download_tif(image_ee,ee_region_mask,bands['mask'],fp_mask,satname)           
-                # create filename for the three images (ms, swir and mask)
-                for key in bands.keys():
-                    im_fn[key] = im_date + '_' + satname + '_' \
-                        + inputs['sitename'] + '_' + key + suffix
-                # if multiple images taken at the same date add 'dupX' to the name (duplicate)
-                im_fn = handle_duplicate_image_names(all_names,bands,im_fn,im_date,satname,inputs['sitename'],suffix)
-                all_names.append(im_fn['ms'])
-                
-                # resample the 20m swir band to the 10m ms band with bilinear interpolation
-                fn_in = fn_swir
-                fn_target = fn_ms
-                fn_out = os.path.join(fp_swir, im_fn['swir'])
-                warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method='bilinear')             
-                
-                # resample 60m QA band to the 10m ms band with nearest-neighbour interpolation
-                fn_in = fn_QA
-                fn_target = fn_ms
-                fn_out = os.path.join(fp_mask, im_fn['mask'])
-                warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method='near')
-                
-                # delete original downloads
-                for _ in [fn_swir,fn_QA]: os.remove(_)  
-                # rename the multispectral band file
-                os.rename(fn_ms,os.path.join(fp_ms, im_fn['ms']))
-                                
-                # metadata for .txt file
-                filename_txt = im_fn['ms'].replace('_ms','').replace('.tif','')
-                metadict = {'filename':im_fn['ms'],'acc_georef':georef_accs[i],
-                            'epsg':im_epsg[i],'image_quality':im_quality[i]}
-                
-                new_SDS_preprocess.save_single_jpg(filename = im_fn['ms'],
-                                       tif_paths = tif_paths,
-                                       satname=satname,
-                                       sitename=inputs['sitename'],
-                                       cloud_thresh=cloud_threshold,
-                                       cloud_mask_issue=cloud_mask_issue,
-                                       filepath_data=inputs['filepath'],
-                                       collection=inputs['collection'],
-                                       )
+                    # create filename for both images (ms and pan)
+                    for key in bands.keys():
+                        im_fn[key] = im_date + '_' + satname + '_' + inputs['sitename'] + '_' + key + suffix
 
-            # write metadata
-            with open(os.path.join(filepaths[0],filename_txt + '.txt'), 'w') as f:
-                for key in metadict.keys():
-                    f.write('%s\t%s\n'%(key,metadict[key]))
+                    # if multiple images taken at the same date add 'dupX' to the name (duplicate number X)
+                    im_fn = handle_duplicate_image_names(all_names,bands,im_fn,im_date,satname,inputs['sitename'],suffix)
+                    im_fn['mask'] = im_fn['ms'].replace('_ms','_mask')
+                    all_names.append(im_fn['ms'])
+                    
+                    # resample the ms bands to the pan band with bilinear interpolation (for pan-sharpening later)
+                    fn_in = fn_ms
+                    fn_target = fn_pan
+                    fn_out = os.path.join(fp_ms, im_fn['ms'])
+                    warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method='bilinear')             
+                    
+                    # resample QA band to the pan band with nearest-neighbour interpolation
+                    fn_in = fn_QA
+                    fn_target = fn_pan
+                    fn_out = os.path.join(fp_mask, im_fn['mask'])
+                    warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method='near')
+
+                    # rename pan band
+                    try:
+                        os.rename(fn_pan,os.path.join(fp_pan,im_fn['pan']))
+                    except:
+                        os.remove(os.path.join(fp_pan,im_fn['pan']))
+                        os.rename(fn_pan,os.path.join(fp_pan,im_fn['pan']))  
+                    # delete original downloads
+                    for _ in [fn_ms,fn_QA]: os.remove(_)
+                    
+                    # metadata for .txt file
+                    filename_txt = im_fn['ms'].replace('_ms','').replace('.tif','')
+                    metadict = {'filename':im_fn['ms'],'acc_georef':georef_accs[i],
+                                'epsg':im_epsg[i],'image_quality':im_quality[i]}
+
+                    if save_jpg:
+                        tif_paths= SDS_tools.get_filepath(inputs,satname)
+                        SDS_preprocess.save_single_jpg(filename = im_fn['ms'],
+                                                        tif_paths = tif_paths,
+                                                        satname=satname,
+                                                        sitename=inputs['sitename'],
+                                                        cloud_thresh=cloud_threshold,
+                                                        cloud_mask_issue=cloud_mask_issue,
+                                                        filepath_data=inputs['filepath'],
+                                                        collection=inputs['landsat_collection'],
+                                                        )
+                #=============================================================================================#
+                # Sentinel-2 download
+                #=============================================================================================#
+                elif satname in ['S2']:
+                    fp_ms = filepaths[1]
+                    fp_swir = filepaths[2]
+                    fp_mask = filepaths[3]    
+                    # select bands (10m ms RGB+NIR, 20m SWIR1, 60m QA band)
+                    bands['ms'] = [im_bands[_] for _ in range(len(im_bands)) if im_bands[_]['id'] in bands_id[:4]]
+                    bands['swir'] = [im_bands[_] for _ in range(len(im_bands)) if im_bands[_]['id'] in bands_id[4:5]]
+                    bands['mask'] = [im_bands[_] for _ in range(len(im_bands)) if im_bands[_]['id'] in bands_id[-1:]]
+                    # adjust polygon for both ms and pan bands
+                    proj_ms = image_ee.select('B1').projection()
+                    proj_swir = image_ee.select('B11').projection()
+                    proj_mask = image_ee.select('QA60').projection()
+                    ee_region_ms = adjust_polygon(inputs['polygon'],proj_ms)
+                    ee_region_swir = adjust_polygon(inputs['polygon'],proj_swir)
+                    ee_region_mask = adjust_polygon(inputs['polygon'],proj_mask)
+                    # download the ms, swir and QA bands from EE    
+                    fn_ms = download_tif(image_ee,ee_region_ms,bands['ms'],fp_ms,satname)
+                    fn_swir = download_tif(image_ee,ee_region_swir,bands['swir'],fp_swir,satname)
+                    fn_QA = download_tif(image_ee,ee_region_mask,bands['mask'],fp_mask,satname)           
+                    # create filename for the three images (ms, swir and mask)
+                    for key in bands.keys():
+                        im_fn[key] = im_date + '_' + satname + '_' \
+                            + inputs['sitename'] + '_' + key + suffix
+                    # if multiple images taken at the same date add 'dupX' to the name (duplicate)
+                    im_fn = handle_duplicate_image_names(all_names,bands,im_fn,im_date,satname,inputs['sitename'],suffix)
+                    all_names.append(im_fn['ms'])
+                    # resample the 20m swir band to the 10m ms band with bilinear interpolation
+                    fn_in = fn_swir
+                    fn_target = fn_ms
+                    fn_out = os.path.join(fp_swir, im_fn['swir'])
+                    warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method='bilinear')             
+                    
+                    # resample 60m QA band to the 10m ms band with nearest-neighbour interpolation
+                    fn_in = fn_QA
+                    fn_target = fn_ms
+                    fn_out = os.path.join(fp_mask, im_fn['mask'])
+                    warp_image_to_target(fn_in,fn_out,fn_target,double_res=False,resampling_method='near')
+                    
+                    # delete original downloads
+                    for _ in [fn_swir,fn_QA]: os.remove(_)  
+                    # rename the multispectral band file
+                    os.rename(fn_ms,os.path.join(fp_ms, im_fn['ms']))
+                                    
+                    # metadata for .txt file
+                    filename_txt = im_fn['ms'].replace('_ms','').replace('.tif','')
+                    metadict = {'filename':im_fn['ms'],'acc_georef':georef_accs[i],
+                                'epsg':im_epsg[i],'image_quality':im_quality[i]}
+                    
+                    if save_jpg:
+                        tif_paths= SDS_tools.get_filepath(inputs,satname)
+                        SDS_preprocess.save_single_jpg(filename = im_fn['ms'],
+                                                        tif_paths = tif_paths,
+                                                        satname=satname,
+                                                        sitename=inputs['sitename'],
+                                                        cloud_thresh=cloud_threshold,
+                                                        cloud_mask_issue=cloud_mask_issue,
+                                                        filepath_data=inputs['filepath'],
+                                                        collection=inputs['landsat_collection'],
+                                                        )
+        except Exception as error:
+            raise error
+        finally:
+            try:
+                # no matter what attempt to write metadata
+                with open(os.path.join(filepaths[0],filename_txt + '.txt'), 'w') as f:
+                    for key in metadict.keys():
+                        f.write('%s\t%s\n'%(key,metadict[key]))
+            except Exception as e:
+                print(f"Was not able to save the metadata for the last download that failed. \n{e}")
 
 
     # once all images have been downloaded, load metadata from .txt files
