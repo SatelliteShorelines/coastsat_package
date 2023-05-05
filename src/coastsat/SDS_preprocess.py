@@ -590,9 +590,7 @@ def save_single_jpg(filename,tif_paths,satname,sitename,cloud_thresh,cloud_mask_
     date = filename[:19]
     plt.ioff()  # turning interactive plotting off
     create_jpg(im_ms, cloud_mask, date, satname, jpg_directory)
-    # print the location where the images have been saved
-    print('Satellite images saved as .jpg in ' + os.path.join(filepath_data, sitename,
-                                                    'jpg_files', 'preprocessed'))
+
 
 def save_jpg(metadata, settings, **kwargs):
     """
