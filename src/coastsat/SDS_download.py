@@ -11,6 +11,9 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import pdb
+from typing import List, Dict
+import time
+from functools import wraps
 
 # earth engine module
 import ee
@@ -38,7 +41,107 @@ from coastsat import SDS_preprocess, SDS_tools, gdal_merge
 np.seterr(all='ignore') # raise/ignore divisions by 0 and nans
 gdal.PushErrorHandler('CPLQuietErrorHandler')
 
-def retrieve_images(inputs):
+# decorator to try download function again and wait 1 second in between
+def retry(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        max_tries = 3
+        for i in range(max_tries):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                print(f"Attempt {i+1} failed: {str(e)}")
+                if i+1 == max_tries:
+                    filename = args[3]  # access fp_ms(aka filename) from args tuple
+                    print(f"Too many attempts, crashed while downloading image {filename}")
+                    raise e
+                else:
+                    time.sleep(1)
+    return wrapper
+
+def get_image_quality(satname:str, im_meta:dict)->str:
+    """
+    Get the image quality for a given satellite name and image metadata.
+    If the image quality field is missing 'NA' is returned
+
+    Args:
+        satname (str): Satellite name identifier (e.g. 'L5', 'L7', 'L8', 'L9', 'S2')
+        im_meta (dict): Image metadata containing the properties field
+
+    Returns:
+        im_quality (str): Image quality value from the metadata based on satellite name
+
+    Satellite information:
+        L5, L7: Landsat 5 and Landsat 7
+        L8, L9: Landsat 8 and Landsat 9
+        S2: Sentinel-2
+    """
+    if satname in ['L5', 'L7']:
+        im_quality = im_meta['properties'].get('IMAGE_QUALITY','NA')
+    elif satname in ['L8', 'L9']:
+        im_quality = im_meta['properties'].get('IMAGE_QUALITY_OLI','NA')
+    elif satname in ['S2']: #['PASSED' or 'FAILED']
+        im_quality = im_meta['properties'].get('RADIOMETRIC_QUALITY', 'NA')
+    return im_quality
+
+def get_georeference_accuracy(satname: str, im_meta: dict) -> str:
+    """
+    Get the accuracy of geometric reference based on the satellite name and
+    the image metadata.
+
+    Landsat default value of accuracy is RMSE = 12m
+
+    Sentinel-2 don't provide a georeferencing accuracy (RMSE as in Landsat), instead the images include a quality control flag in the metadata that
+    indicates georeferencing accuracy: a value of 1 signifies a passed geometric check, while -1 denotes failure(i.e., the georeferencing is not accurate). 
+    This flag is stored in the image's metadata, which is additional information about the image stored with it. However, the specific property or field in the metadata where this flag is stored can vary across the Sentinel-2 archive, meaning it's not always in the same place or under the same name.
+
+    Parameters:
+    satname (str): Satellite name, e.g., 'L5', 'L7', 'L8', 'L9', or 'S2'.
+    im_meta (dict): Image metadata containing the properties for geometric
+                    reference accuracy.
+
+    Returns:
+    str: The accuracy of the geometric reference.
+    """
+    if satname in ['L5', 'L7', 'L8', 'L9']:
+        acc_georef = im_meta['properties'].get('GEOMETRIC_RMSE_MODEL', 12)
+    elif satname == 'S2':
+        flag_names = ['GEOMETRIC_QUALITY_FLAG', 'GEOMETRIC_QUALITY', 'quality_check', 'GENERAL_QUALITY_FLAG']
+        key = next((key for key in flag_names if key in im_meta['properties'].keys()), None)
+        if key is None:
+            acc_georef =-1
+        acc_georef = 1 if im_meta['properties'][key] == 'PASSED' else -1
+    return acc_georef
+
+
+def handle_duplicate_image_names(all_names: List[str], bands: Dict[str, str], im_fn: Dict[str, str], im_date: str, satname: str, sitename:str, suffix: str) -> Dict[str, str]:
+    """
+    This function handles duplicate names for image files. If an image file name is already in use, 
+    it adds a '_dupX' suffix to the name (where 'X' is a counter for the number of duplicates).
+
+    Parameters:
+    all_names (list): A list containing all image file names that have been handled so far.
+    bands (dict): A dictionary where the keys are the band names.
+    im_fn (dict): A dictionary where the keys are the band names and the values are the current file names for each band.
+    im_date (str): A string representing the date when the image was taken.
+    satname (str): A string representing the name of the satellite that took the image.
+    sitename: A string representing name of directory containing all downloaded images
+    suffix (str): A string representing the file extension or other suffix to be added to the file name.
+
+    Returns:
+    im_fn (dict): The updated dictionary where the keys are the band names and the values are the modified file names for each band.
+    """
+    # if multiple images taken at the same date add 'dupX' to the name (duplicate)
+    duplicate_counter = 0
+    while im_fn['ms'] in all_names:
+        duplicate_counter += 1
+        for key in bands.keys():
+            im_fn[key] = (f"{im_date}_{satname}_{sitename}"
+                          f"_{key}_dup{duplicate_counter}{suffix}")
+    return im_fn
+
+
+def retrieve_images(inputs,cloud_threshold:float=99.9,cloud_mask_issue:bool=False,save_jpg:bool=True):
     """
     Downloads all images from Landsat 5, Landsat 7, Landsat 8 and Sentinel-2
     covering the area of interest and acquired between the specified dates.
@@ -73,6 +176,9 @@ def retrieve_images(inputs):
             ```
         'filepath_data': str
             filepath to the directory where the images are downloaded
+    
+    save_jpg: bool:
+        save jpgs for each image downloaded
 
     Returns:
     -----------
@@ -81,7 +187,6 @@ def retrieve_images(inputs):
         date, filename, georeferencing accuracy and image coordinate reference system
 
     """
-    
     # initialise connection with GEE server
     ee.Initialize()
 
@@ -123,17 +228,12 @@ def retrieve_images(inputs):
     num_satellites = len(im_dict_T1.keys())
     for satname in tqdm(im_dict_T1.keys(),
         desc=f'Downloading Imagery for {num_satellites} satellites'):
-        # position=count,
-        # leave=True):
+
         count+=1
-    # for satname in im_dict_T1.keys():
-        
-        # print('%s: %d images'%(satname,len(im_dict_T1[satname])))
-        
         # create subfolder structure to store the different bands
         filepaths = SDS_tools.create_folder_structure(im_folder, satname)
         # initialise variables and loop through images
-        georef_accs = []; filenames = []; all_names = []; im_epsg = []; im_quality = [];
+        georef_accs = []; all_names = []; im_epsg = []; im_quality = [];
         bands_id = bands_dict[satname]
         
         # loop through each image
@@ -145,43 +245,19 @@ def retrieve_images(inputs):
             im_meta = im_dict_T1[satname][i]
 
             # get time of acquisition (UNIX time) and convert to datetime
-            t = im_meta['properties']['system:time_start']
-            im_timestamp = datetime.fromtimestamp(t/1000, tz=pytz.utc)
+            acquisition_time = im_meta['properties']['system:time_start']
+            im_timestamp = datetime.fromtimestamp(acquisition_time/1000, tz=pytz.utc)
             im_date = im_timestamp.strftime('%Y-%m-%d-%H-%M-%S')
 
             # get epsg code
             im_epsg.append(int(im_meta['bands'][0]['crs'][5:]))
+            
+            # get geometric accuracy and image quality
+            accuracy_georef = get_georeference_accuracy(satname, im_meta)
+            image_quality = get_image_quality(satname, im_meta)
+            im_quality.append(image_quality)
+            georef_accs.append(accuracy_georef)
 
-            # get geometric accuracy
-            if satname in ['L5','L7','L8','L9']:
-                if 'GEOMETRIC_RMSE_MODEL' in im_meta['properties'].keys():
-                    acc_georef = im_meta['properties']['GEOMETRIC_RMSE_MODEL']
-                else:
-                    acc_georef = 12 # default value of accuracy (RMSE = 12m)
-                # add additional metadata for Sharon's Sniffer [image_quality 1-9 for Landsat]
-                if satname in ['L5','L7']:
-                    im_quality.append(im_meta['properties']['IMAGE_QUALITY'])
-                elif satname in ['L8','L9']:
-                    im_quality.append(im_meta['properties']['IMAGE_QUALITY_OLI'])
-            elif satname in ['S2']:
-                # Sentinel-2 products don't provide a georeferencing accuracy (RMSE as in Landsat)
-                # but they have a flag indicating if the geometric quality control was passed or failed
-                # if passed a value of 1 is stored if failed a value of -1 is stored in the metadata
-                # the name of the property containing the flag changes across the S2 archive
-                # check which flag name is used for the image and store the 1/-1 for acc_georef
-                flag_names = ['GEOMETRIC_QUALITY_FLAG', 'GEOMETRIC_QUALITY', 'quality_check', 'GENERAL_QUALITY_FLAG']
-                for key in flag_names: 
-                    if key in im_meta['properties'].keys(): break
-                if im_meta['properties'][key] == 'PASSED': 
-                    acc_georef = 1
-                else: 
-                    acc_georef = -1
-                # add additional metadata for Sharon's Sniffer ['PASSED' or 'FAILED']
-                if 'RADIOMETRIC_QUALITY' in im_meta['properties'].keys():
-                    im_quality.append(im_meta['properties']['RADIOMETRIC_QUALITY'])
-                else:
-                    im_quality.append('NA')
-            georef_accs.append(acc_georef)
 
             # download the images as .tif files
             bands = dict([])
@@ -205,33 +281,14 @@ def retrieve_images(inputs):
                 proj = image_ee.select('B1').projection()
                 ee_region = adjust_polygon(inputs['polygon'],proj)
                 # download .tif from EE (one file with ms bands and one file with QA band)
-                count = 0
-                while True:
-                    try:    
-                        fn_ms, fn_QA = download_tif(image_ee,ee_region,bands['ms'],fp_ms,satname) 
-                        break
-                    except:
-                        print('\nDownload failed, trying again...')
-                        count += 1
-                        if count > 100:
-                            raise Exception('Too many attempts, crashed while downloading image %s'%im_meta['id'])
-                        else:
-                            continue
-                        
+                fn_ms, fn_QA = download_tif(image_ee,ee_region,bands['ms'],fp_ms,satname) 
                 # create filename for image
                 for key in bands.keys():
                     im_fn[key] = im_date + '_' + satname + '_' + inputs['sitename'] + '_' + key + suffix
                 # if multiple images taken at the same date add 'dupX' to the name (duplicate number X)
-                duplicate_counter = 0
-                while im_fn['ms'] in all_names:
-                    duplicate_counter += 1
-                    for key in bands.keys():
-                        im_fn[key] = im_date + '_' + satname + '_' \
-                            + inputs['sitename'] + '_' + key \
-                            + '_dup%d'%duplicate_counter + suffix
+                im_fn = handle_duplicate_image_names(all_names,bands,im_fn,im_date,satname,inputs['sitename'],suffix)
                 im_fn['mask'] = im_fn['ms'].replace('_ms','_mask')
                 all_names.append(im_fn['ms'])
-                filenames.append(im_fn['ms'])
                 
                 # resample ms bands to 15m with bilinear interpolation
                 fn_in = fn_ms
@@ -252,6 +309,20 @@ def retrieve_images(inputs):
                 filename_txt = im_fn['ms'].replace('_ms','').replace('.tif','')
                 metadict = {'filename':im_fn['ms'],'acc_georef':georef_accs[i],
                             'epsg':im_epsg[i],'image_quality':im_quality[i]}
+                
+               
+                filename = im_fn['ms']
+                tif_paths= SDS_tools.get_filepath(inputs,satname)
+
+                new_SDS_preprocess.save_single_jpg(filename = im_fn['ms'],
+                                                   tif_paths = tif_paths,
+                                                   satname=satname,
+                                                   sitename=inputs['sitename'],
+                                                   cloud_thresh=cloud_threshold,
+                                                   cloud_mask_issue=cloud_mask_issue,
+                                                   filepath_data=inputs['filepath'],
+                                                   collection=inputs['collection'],
+                                                   )
 
             #=============================================================================================#
             # Landsat 7, 8 and 9 download
@@ -275,34 +346,17 @@ def retrieve_images(inputs):
                 ee_region_pan = adjust_polygon(inputs['polygon'],proj_pan)
 
                 # download both ms and pan bands from EE
-                count = 0
-                while True:
-                    try:    
-                        fn_ms, fn_QA = download_tif(image_ee,ee_region_ms,bands['ms'],fp_ms,satname)
-                        fn_pan = download_tif(image_ee,ee_region_pan,bands['pan'],fp_pan,satname)
-                        break
-                    except:
-                        print('\nDownload failed, trying again...')
-                        count += 1
-                        if count > 100:
-                            raise Exception('Too many attempts, crashed while downloading image %s'%im_meta['id'])
-                        else:
-                            continue
-                
+                fn_ms, fn_QA = download_tif(image_ee,ee_region_ms,bands['ms'],fp_ms,satname)
+                fn_pan = download_tif(image_ee,ee_region_pan,bands['pan'],fp_pan,satname)
+
                 # create filename for both images (ms and pan)
                 for key in bands.keys():
                     im_fn[key] = im_date + '_' + satname + '_' + inputs['sitename'] + '_' + key + suffix
+
                 # if multiple images taken at the same date add 'dupX' to the name (duplicate number X)
-                duplicate_counter = 0
-                while im_fn['ms'] in all_names:
-                    duplicate_counter += 1
-                    for key in bands.keys():
-                        im_fn[key] = im_date + '_' + satname + '_' \
-                            + inputs['sitename'] + '_' + key \
-                            + '_dup%d'%duplicate_counter + suffix
+                im_fn = handle_duplicate_image_names(all_names,bands,im_fn,im_date,satname,inputs['sitename'],suffix)
                 im_fn['mask'] = im_fn['ms'].replace('_ms','_mask')
                 all_names.append(im_fn['ms'])
-                filenames.append(im_fn['ms'])  
                 
                 # resample the ms bands to the pan band with bilinear interpolation (for pan-sharpening later)
                 fn_in = fn_ms
@@ -330,6 +384,15 @@ def retrieve_images(inputs):
                 metadict = {'filename':im_fn['ms'],'acc_georef':georef_accs[i],
                             'epsg':im_epsg[i],'image_quality':im_quality[i]}
 
+                new_SDS_preprocess.save_single_jpg(filename = im_fn['ms'],
+                                       tif_paths = tif_paths,
+                                       satname=satname,
+                                       sitename=inputs['sitename'],
+                                       cloud_thresh=cloud_threshold,
+                                       cloud_mask_issue=cloud_mask_issue,
+                                       filepath_data=inputs['filepath'],
+                                       collection=inputs['collection'],
+                                       )
             #=============================================================================================#
             # Sentinel-2 download
             #=============================================================================================#
@@ -348,36 +411,17 @@ def retrieve_images(inputs):
                 ee_region_ms = adjust_polygon(inputs['polygon'],proj_ms)
                 ee_region_swir = adjust_polygon(inputs['polygon'],proj_swir)
                 ee_region_mask = adjust_polygon(inputs['polygon'],proj_mask)
-                # download the ms, swir and QA bands from EE
-                count = 0
-                while True:
-                    try:    
-                        fn_ms = download_tif(image_ee,ee_region_ms,bands['ms'],fp_ms,satname)
-                        fn_swir = download_tif(image_ee,ee_region_swir,bands['swir'],fp_swir,satname)
-                        fn_QA = download_tif(image_ee,ee_region_mask,bands['mask'],fp_mask,satname)
-                        break
-                    except:
-                        print('\nDownload failed, trying again...')
-                        count += 1
-                        if count > 100:
-                            raise Exception('Too many attempts, crashed while downloading image %s'%im_meta['id'])
-                        else:
-                            continue             
-                
+                # download the ms, swir and QA bands from EE    
+                fn_ms = download_tif(image_ee,ee_region_ms,bands['ms'],fp_ms,satname)
+                fn_swir = download_tif(image_ee,ee_region_swir,bands['swir'],fp_swir,satname)
+                fn_QA = download_tif(image_ee,ee_region_mask,bands['mask'],fp_mask,satname)           
                 # create filename for the three images (ms, swir and mask)
                 for key in bands.keys():
                     im_fn[key] = im_date + '_' + satname + '_' \
                         + inputs['sitename'] + '_' + key + suffix
                 # if multiple images taken at the same date add 'dupX' to the name (duplicate)
-                duplicate_counter = 0
-                while im_fn['ms'] in all_names:
-                    duplicate_counter += 1
-                    for key in bands.keys():
-                        im_fn[key] = im_date + '_' + satname + '_' \
-                            + inputs['sitename'] + '_' + key \
-                            + '_dup%d'%duplicate_counter + suffix
+                im_fn = handle_duplicate_image_names(all_names,bands,im_fn,im_date,satname,inputs['sitename'],suffix)
                 all_names.append(im_fn['ms'])
-                filenames.append(im_fn['ms']) 
                 
                 # resample the 20m swir band to the 10m ms band with bilinear interpolation
                 fn_in = fn_swir
@@ -400,27 +444,25 @@ def retrieve_images(inputs):
                 filename_txt = im_fn['ms'].replace('_ms','').replace('.tif','')
                 metadict = {'filename':im_fn['ms'],'acc_georef':georef_accs[i],
                             'epsg':im_epsg[i],'image_quality':im_quality[i]}
+                
+                new_SDS_preprocess.save_single_jpg(filename = im_fn['ms'],
+                                       tif_paths = tif_paths,
+                                       satname=satname,
+                                       sitename=inputs['sitename'],
+                                       cloud_thresh=cloud_threshold,
+                                       cloud_mask_issue=cloud_mask_issue,
+                                       filepath_data=inputs['filepath'],
+                                       collection=inputs['collection'],
+                                       )
 
             # write metadata
             with open(os.path.join(filepaths[0],filename_txt + '.txt'), 'w') as f:
                 for key in metadict.keys():
                     f.write('%s\t%s\n'%(key,metadict[key]))
-            # print percentage completion for user
-            # print('\r%d%%' %int((i+1)/len(im_dict_T1[satname])*100), end='')
 
-        # print('')
 
     # once all images have been downloaded, load metadata from .txt files
     metadata = get_metadata(inputs)
-    # merge overlapping images (necessary only if the polygon is at the boundary of an image)
-    # if 'S2' in metadata.keys():
-    #     print("\n Called merge_overlapping_images\n")
-    #     try:
-    #         metadata = merge_overlapping_images(metadata,inputs)
-    #     except:
-    #         print('WARNING: there was an error while merging overlapping S2 images,'+
-    #               ' please open an issue on Github at https://github.com/kvos/CoastSat/issues'+
-    #               ' and include your script so we can find out what happened.')
 
     # save metadata dict
     with open(os.path.join(im_folder, inputs['sitename'] + '_metadata' + '.pkl'), 'wb') as f:
@@ -705,7 +747,9 @@ def adjust_polygon(polygon,proj):
     ee_region = ee.Geometry.Rectangle(rect, proj, True, False).transform("EPSG:4326")
     
     return ee_region
-    
+
+# decorator to try the download up to 3 times
+@retry 
 def download_tif(image, polygon, bands, filepath, satname):
     """
     Downloads a .TIF image from the ee server. The image is downloaded as a

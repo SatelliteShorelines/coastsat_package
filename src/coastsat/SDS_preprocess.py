@@ -495,7 +495,7 @@ def rescale_image_intensity(im, cloud_mask, prob_high):
 
     return im_adj
 
-def create_jpg(im_ms, cloud_mask, date, satname, filepath):
+def create_jpg(im_ms:np.array, cloud_mask:np.array, date:str, satname:str, filepath:str)->None:
     """
     Saves a .jpg file with the RGB image as well as the NIR and SWIR1 grayscale images.
     This functions can be modified to obtain different visualisations of the 
@@ -542,6 +542,57 @@ def create_jpg(im_ms, cloud_mask, date, satname, filepath):
             imsave(fname, im_SWIR, quality=100)
         if ext == "NIR":
             imsave(fname, im_NIR, quality=100)
+
+def save_single_jpg(filename,tif_paths,satname,sitename,cloud_thresh,cloud_mask_issue,filepath_data,collection, **kwargs):
+    """
+    Save a jpg for a single set of tifs
+
+    KV WRL 2018
+
+    Arguments:
+    -----------
+    cloud_thresh: float
+        value between 0 and 1 indicating the maximum cloud fraction in 
+        the cropped image that is accepted
+    cloud_mask_issue: boolean
+        True if there is an issue with the cloud mask and sand pixels
+        are erroneously being masked on the images
+            
+    Returns:
+    -----------
+    Creates RGB, NIR, SWIR as .jpg in:
+    RGB saved under data/preprocessed/RGB
+    NIR saved under data/preprocessed/NIR
+    SWIR saved under data/preprocessed/SWIR
+    """
+    # create subfolder to store the jpg files
+    jpg_directory = os.path.join(filepath_data, sitename, 'jpg_files', 'preprocessed')
+    os.makedirs(jpg_directory,exist_ok=True)
+    # get locations to each tif file for ms, pan, mask, swir (if applicable for satname)
+    fn = SDS_tools.get_filenames(filename,tif_paths, satname)
+    # preprocess the image and perform pansharpening
+    im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = preprocess_single(fn, satname,cloud_mask_issue,
+                                                                             False, collection)
+    # compute cloud_cover percentage (with no data pixels)
+    cloud_cover_combined = np.divide(sum(sum(cloud_mask.astype(int))),
+                            (cloud_mask.shape[0]*cloud_mask.shape[1]))
+    if cloud_cover_combined > 0.99: # if 99% of cloudy pixels in image skip
+        return
+    # remove no data pixels from the cloud mask (for example L7 bands of no data should not be accounted for)
+    cloud_mask_adv = np.logical_xor(cloud_mask, im_nodata)
+    # compute updated cloud cover percentage (without no data pixels)
+    cloud_cover = np.divide(sum(sum(cloud_mask_adv.astype(int))),
+                            (sum(sum((~im_nodata).astype(int)))))
+    # skip image if cloud cover is above threshold
+    if cloud_cover > cloud_thresh or cloud_cover == 1:
+        return
+    # save .jpg with date and satellite in the title
+    date = filename[:19]
+    plt.ioff()  # turning interactive plotting off
+    create_jpg(im_ms, cloud_mask, date, satname, jpg_directory)
+    # print the location where the images have been saved
+    print('Satellite images saved as .jpg in ' + os.path.join(filepath_data, sitename,
+                                                    'jpg_files', 'preprocessed'))
 
 def save_jpg(metadata, settings, **kwargs):
     """
