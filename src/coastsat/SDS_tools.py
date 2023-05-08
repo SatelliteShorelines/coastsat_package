@@ -10,6 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 import pdb
+import pandas as pd
 
 # other modules
 from osgeo import gdal, osr
@@ -682,10 +683,8 @@ def output_to_gdf(output, geomtype):
         contains the shorelines + attirbutes
   
     """    
-     
     # loop through the mapped shorelines
-    counter = 0
-    gdf_all = None
+    gdf_list = []
     for i in range(len(output['shorelines'])):
         # skip if there shoreline is empty 
         if len(output['shorelines'][i]) == 0:
@@ -709,14 +708,47 @@ def output_to_gdf(output, geomtype):
             gdf.loc[i,'satname'] = output['satname'][i]
             gdf.loc[i,'geoaccuracy'] = output['geoaccuracy'][i]
             gdf.loc[i,'cloud_cover'] = output['cloud_cover'][i]
-            # store into geodataframe
-            if counter == 0:
-                gdf_all = gdf
-            else:
-                gdf_all = gdf_all.append(gdf)
-            counter = counter + 1
-            
+            gdf_list.append(gdf)
+
+    # concatenate all GeoDataFrames in the list into a single GeoDataFrame
+    gdf_all = pd.concat(gdf_list, ignore_index=True)
+
     return gdf_all
+
+    # # loop through the mapped shorelines
+    # counter = 0
+    # gdf_all = None
+    # for i in range(len(output['shorelines'])):
+    #     # skip if there shoreline is empty 
+    #     if len(output['shorelines'][i]) == 0:
+    #         continue
+    #     else:
+    #         # save the geometry depending on the linestyle
+    #         if geomtype == 'lines':
+    #             # linestrings must consist of 2 or more points
+    #             if len(output['shorelines'][i]) < 2:
+    #                 continue
+    #             geom = geometry.LineString(output['shorelines'][i])
+    #         elif geomtype == 'points':
+    #             coords = output['shorelines'][i]
+    #             geom = geometry.MultiPoint([(coords[_,0], coords[_,1]) for _ in range(coords.shape[0])])
+    #         else:
+    #             raise Exception('geomtype %s is not an option, choose between lines or points'%geomtype)
+    #         # save into geodataframe with attributes
+    #         gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(geom))
+    #         gdf.index = [i]
+    #         gdf.loc[i,'date'] = output['dates'][i].strftime('%Y-%m-%d %H:%M:%S')
+    #         gdf.loc[i,'satname'] = output['satname'][i]
+    #         gdf.loc[i,'geoaccuracy'] = output['geoaccuracy'][i]
+    #         gdf.loc[i,'cloud_cover'] = output['cloud_cover'][i]
+    #         # store into geodataframe
+    #         if counter == 0:
+    #             gdf_all = gdf
+    #         else:
+    #             gdf_all = gdf_all.append(gdf)
+    #         counter = counter + 1
+            
+    # return gdf_all
 
 def transects_to_gdf(transects):
     """
@@ -735,21 +767,36 @@ def transects_to_gdf(transects):
 
         
     """  
-       
     # loop through the mapped shorelines
-    for i,key in enumerate(list(transects.keys())):
+    gdf_list = []
+    for i, key in enumerate(list(transects.keys())):
         # save the geometry + attributes
         geom = geometry.LineString(transects[key])
         gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(geom))
         gdf.index = [i]
         gdf.loc[i,'name'] = key
-        # store into geodataframe
-        if i == 0:
-            gdf_all = gdf
-        else:
-            gdf_all = gdf_all.append(gdf)
-            
+        gdf_list.append(gdf)
+
+    # concatenate all GeoDataFrames in the list into a single GeoDataFrame
+    gdf_all = pd.concat(gdf_list, ignore_index=True)
+
     return gdf_all
+
+
+    # # loop through the mapped shorelines
+    # for i,key in enumerate(list(transects.keys())):
+    #     # save the geometry + attributes
+    #     geom = geometry.LineString(transects[key])
+    #     gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(geom))
+    #     gdf.index = [i]
+    #     gdf.loc[i,'name'] = key
+    #     # store into geodataframe
+    #     if i == 0:
+    #         gdf_all = gdf
+    #     else:
+    #         gdf_all = gdf_all.append(gdf)
+            
+    # return gdf_all
 
 def get_image_bounds(fn):
     """

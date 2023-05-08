@@ -11,6 +11,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import pdb
+import pandas as pd
 
 # image processing modules
 import skimage.transform as transform
@@ -875,15 +876,28 @@ def get_reference_sl(metadata, settings):
             with open(os.path.join(filepath, sitename + '_reference_shoreline.pkl'), 'wb') as f:
                 pickle.dump(pts_coords, f)
             # also store as .geojson in case user wants to drag-and-drop on GIS for verification
-            for k,line in enumerate(geoms):
+            # for k,line in enumerate(geoms):
+            #     gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(line))
+            #     gdf.index = [k]
+            #     gdf.loc[k,'name'] = 'reference shoreline ' + str(k+1)
+            #     # store into geodataframe
+            #     if k == 0:
+            #         gdf_all = gdf
+            #     else:
+            #         gdf_all = gdf_all.append(gdf)
+
+            # initialize an empty list to store the individual GeoDataFrames
+            gdf_list = []
+
+            for k, line in enumerate(geoms):
                 gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(line))
                 gdf.index = [k]
-                gdf.loc[k,'name'] = 'reference shoreline ' + str(k+1)
-                # store into geodataframe
-                if k == 0:
-                    gdf_all = gdf
-                else:
-                    gdf_all = gdf_all.append(gdf)
+                gdf.loc[k, 'name'] = 'reference shoreline ' + str(k+1)
+                gdf_list.append(gdf)
+
+            # concatenate all GeoDataFrames in the list into a single GeoDataFrame
+            gdf_all = pd.concat(gdf_list, ignore_index=True)
+
             gdf_all.crs = {'init':'epsg:'+str(image_epsg)}
             # convert from image_epsg to user-defined coordinate system
             gdf_all = gdf_all.to_crs({'init': 'epsg:'+str(settings['output_epsg'])})
