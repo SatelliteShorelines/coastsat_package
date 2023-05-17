@@ -330,13 +330,20 @@ def compute_intersection_QC(output, transects, settings):
                 xy_rot = np.matmul(Mrot, xy_close)
                 # remove points that are too far landwards relative to the transect origin (i.e., negative chainage)
                 xy_rot[0, xy_rot[0,:] < settings['min_chainage']] = np.nan
-                
+
                 # compute std, median, max, min of the intersections
-                std_intersect[i] = np.nanstd(xy_rot[0,:])
-                med_intersect[i] = np.nanmedian(xy_rot[0,:])
-                max_intersect[i] = np.nanmax(xy_rot[0,:])
-                min_intersect[i] = np.nanmin(xy_rot[0,:])
-                n_intersect[i] = len(xy_rot[0,:])
+                if not np.all(np.isnan(xy_rot[0,:])):
+                    std_intersect[i] = np.nanstd(xy_rot[0,:])
+                    med_intersect[i] = np.nanmedian(xy_rot[0,:])
+                    max_intersect[i] = np.nanmax(xy_rot[0,:])
+                    min_intersect[i] = np.nanmin(xy_rot[0,:])
+                    n_intersect[i] = len(xy_rot[0,:])
+                else:
+                    std_intersect[i] = np.nan
+                    med_intersect[i] = np.nan
+                    max_intersect[i] = np.nan
+                    min_intersect[i] = np.nan
+                    n_intersect[i] = 0
                 
         # quality control the intersections using dispersion metrics (std and range)
         condition1 = std_intersect <= settings['max_std']
