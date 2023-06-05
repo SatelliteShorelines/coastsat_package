@@ -320,6 +320,11 @@ def create_folder_structure(im_folder, satname):
 def get_filepath(inputs,satname):
     """
     Create filepath to the different folders containing the satellite images.
+
+    Generate the filepaths to the satellite image folders based on the provided site name and satellite name.
+    This function will create the filepaths to the directories containing the images from the specified satellite mission. 
+    The subdirectories under each satellite mission directory will be based on the specific types of images associated with the satellite mission.
+
     
     KV WRL 2018
 
@@ -353,35 +358,36 @@ def get_filepath(inputs,satname):
         short name of the satellite mission ('L5','L7','L8','S2')
                 
     Returns:    
+      filepath: str or list of str
+      contains the filepath(s) to the folder(s) containing the satellite images
     -----------
-    filepath: str or list of str
-        contains the filepath(s) to the folder(s) containing the satellite images
+    list
+        List of filepaths to the image folders. Depending on the `satname`, the list can contain paths to the following types of images:
+            'L5': Multispectral (ms) and Mask images
+            'L7': Multispectral (ms), Panchromatic (pan), and Mask images
+            'L8': Multispectral (ms), Panchromatic (pan), and Mask images
+            'L9': Multispectral (ms), Panchromatic (pan), and Mask images
+            'S2': Multispectral (ms), Short-Wave Infrared (swir), and Mask images
+    """  
+        
+    sat_paths = {
+        'L5': ['ms', 'mask'],
+        'L7': ['ms', 'pan', 'mask'],
+        'L8': ['ms', 'pan', 'mask'],
+        'L9': ['ms', 'pan', 'mask'],
+        'S2': ['ms', 'swir', 'mask'],
+    }
     
-    """     
-    
-    sitename = inputs['sitename']
+    # Make sure that the provided satellite name is supported
+    if satname not in sat_paths:
+        raise ValueError(f"Unsupported satellite name '{satname}'")
+
     filepath_data = inputs['filepath']
-    # access the images
-    if satname == 'L5':
-        # access downloaded Landsat 5 images
-        fp_ms = os.path.join(filepath_data, sitename, satname, 'ms')
-        fp_mask = os.path.join(filepath_data, sitename, satname, 'mask')
-        filepath = [fp_ms, fp_mask]
-    elif satname in ['L7','L8','L9']:
-        # access downloaded Landsat 7 images
-        fp_ms = os.path.join(filepath_data, sitename, satname, 'ms')
-        fp_pan = os.path.join(filepath_data, sitename, satname, 'pan')
-        fp_mask = os.path.join(filepath_data, sitename, satname, 'mask')
-        filepath = [fp_ms, fp_pan, fp_mask]
-    elif satname == 'S2':
-        # access downloaded Sentinel 2 images
-        fp_ms = os.path.join(filepath_data, sitename, satname, 'ms')
-        fp_swir = os.path.join(filepath_data, sitename, satname, 'swir')
-        fp_mask = os.path.join(filepath_data, sitename, satname, 'mask')
-        filepath = [fp_ms, fp_swir, fp_mask]
-            
-    return filepath
+    sitename = inputs['sitename']
     
+    # Generate the filepaths for the provided satellite
+    return [os.path.join(filepath_data, sitename, satname, path) for path in sat_paths[satname]]
+
 def get_filenames(filename, filepath, satname):
     """
     Creates filepath + filename for all the bands belonging to the same image.
