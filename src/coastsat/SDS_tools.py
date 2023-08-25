@@ -3,24 +3,24 @@ This module contains utilities to work with satellite images
     
 Author: Kilian Vos, Water Research Laboratory, University of New South Wales
 """
-
-# load modules
+# Standard library imports
 import os
-import numpy as np
+from datetime import datetime, timedelta
+from typing import List, Dict, Union, Optional
+
+# Third-party imports
+import geopandas as gpd
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
-import pdb
+import numpy as np
 import pandas as pd
-
-# other modules
+from astropy.convolution import convolve
 from osgeo import gdal, osr
-import geopandas as gpd
+from scipy import stats, interpolate
 from shapely import geometry
 import skimage.transform as transform
-from astropy.convolution import convolve
 import pytz
-from datetime import datetime, timedelta
-from scipy import stats, interpolate
+import pdb
 
 # np.seterr(all='ignore') # raise/ignore divisions by 0 and nans
 
@@ -28,11 +28,12 @@ from scipy import stats, interpolate
 # COORDINATES CONVERSION FUNCTIONS
 ###################################################################################################
 
+
 def convert_pix2world(points, georef):
     """
-    Converts pixel coordinates (pixel row and column) to world projected 
+    Converts pixel coordinates (pixel row and column) to world projected
     coordinates performing an affine transformation.
-    
+
     KV WRL 2018
 
     Arguments:
@@ -41,18 +42,22 @@ def convert_pix2world(points, georef):
         array with 2 columns (row first and column second)
     georef: np.array
         vector of 6 elements [Xtr, Xscale, Xshear, Ytr, Yshear, Yscale]
-                
-    Returns:    
+
+    Returns:
     -----------
-    points_converted: np.array or list of np.array 
+    points_converted: np.array or list of np.array
         converted coordinates, first columns with X and second column with Y
-        
+
     """
-    
+
     # make affine transformation matrix
-    aff_mat = np.array([[georef[1], georef[2], georef[0]],
-                       [georef[4], georef[5], georef[3]],
-                       [0, 0, 1]])
+    aff_mat = np.array(
+        [
+            [georef[1], georef[2], georef[0]],
+            [georef[4], georef[5], georef[3]],
+            [0, 0, 1],
+        ]
+    )
     # create affine transformation
     tform = transform.AffineTransform(aff_mat)
 
@@ -60,25 +65,26 @@ def convert_pix2world(points, georef):
     if type(points) is list:
         points_converted = []
         # iterate over the list
-        for i, arr in enumerate(points): 
-            tmp = arr[:,[1,0]]
+        for i, arr in enumerate(points):
+            tmp = arr[:, [1, 0]]
             points_converted.append(tform(tmp))
-          
+
     # if single array
     elif type(points) is np.ndarray:
-        tmp = points[:,[1,0]]
+        tmp = points[:, [1, 0]]
         points_converted = tform(tmp)
-        
+
     else:
-        raise Exception('invalid input type')
-        
+        raise Exception("invalid input type")
+
     return points_converted
+
 
 def convert_world2pix(points, georef):
     """
-    Converts world projected coordinates (X,Y) to image coordinates 
+    Converts world projected coordinates (X,Y) to image coordinates
     (pixel row and column) performing an affine transformation.
-    
+
     KV WRL 2018
 
     Arguments:
@@ -87,43 +93,47 @@ def convert_world2pix(points, georef):
         array with 2 columns (X,Y)
     georef: np.array
         vector of 6 elements [Xtr, Xscale, Xshear, Ytr, Yshear, Yscale]
-                
-    Returns:    
+
+    Returns:
     -----------
-    points_converted: np.array or list of np.array 
+    points_converted: np.array or list of np.array
         converted coordinates (pixel row and column)
-    
+
     """
-    
+
     # make affine transformation matrix
-    aff_mat = np.array([[georef[1], georef[2], georef[0]],
-                       [georef[4], georef[5], georef[3]],
-                       [0, 0, 1]])
+    aff_mat = np.array(
+        [
+            [georef[1], georef[2], georef[0]],
+            [georef[4], georef[5], georef[3]],
+            [0, 0, 1],
+        ]
+    )
     # create affine transformation
     tform = transform.AffineTransform(aff_mat)
-    
+
     # if list of arrays
     if type(points) is list:
         points_converted = []
         # iterate over the list
-        for i, arr in enumerate(points): 
+        for i, arr in enumerate(points):
             points_converted.append(tform.inverse(points))
-            
-    # if single array    
+
+    # if single array
     elif type(points) is np.ndarray:
         points_converted = tform.inverse(points)
-        
+
     else:
-        print('invalid input type')
+        print("invalid input type")
         raise
-        
+
     return points_converted
 
 
 def convert_epsg(points, epsg_in, epsg_out):
     """
     Converts from one spatial reference to another using the epsg codes
-    
+
     KV WRL 2018
 
     Arguments:
@@ -133,15 +143,15 @@ def convert_epsg(points, epsg_in, epsg_out):
     epsg_in: int
         epsg code of the spatial reference in which the input is
     epsg_out: int
-        epsg code of the spatial reference in which the output will be            
-                
-    Returns:    
+        epsg code of the spatial reference in which the output will be
+
+    Returns:
     -----------
-    points_converted: np.array or list of np.array 
+    points_converted: np.array or list of np.array
         converted coordinates from epsg_in to epsg_out
-        
+
     """
-    
+
     # define input and output spatial references
     inSpatialRef = osr.SpatialReference()
     inSpatialRef.ImportFromEPSG(epsg_in)
@@ -153,20 +163,22 @@ def convert_epsg(points, epsg_in, epsg_out):
     if type(points) is list:
         points_converted = []
         # iterate over the list
-        for i, arr in enumerate(points): 
+        for i, arr in enumerate(points):
             points_converted.append(np.array(coordTransform.TransformPoints(arr)))
     # if single array
     elif type(points) is np.ndarray:
-        points_converted = np.array(coordTransform.TransformPoints(points))  
+        points_converted = np.array(coordTransform.TransformPoints(points))
     else:
-        raise Exception('invalid input type')
+        raise Exception("invalid input type")
 
     return points_converted
+
 
 ###################################################################################################
 # IMAGE ANALYSIS FUNCTIONS
 ###################################################################################################
-    
+
+
 def nd_index(im1, im2, cloud_mask):
     """
     Computes normalised difference index on 2 images (2D), given a cloud mask (2D).
@@ -182,13 +194,13 @@ def nd_index(im1, im2, cloud_mask):
     cloud_mask: np.array
         2D cloud mask with True where cloud pixels are
 
-    Returns:    
+    Returns:
     -----------
     im_nd: np.array
         Image (2D) containing the ND index
-        
+
     """
-    
+
     # reshape the cloud mask
     vec_mask = cloud_mask.reshape(im1.shape[0] * im1.shape[1])
     # initialise with NaNs
@@ -197,45 +209,59 @@ def nd_index(im1, im2, cloud_mask):
     vec1 = im1.reshape(im1.shape[0] * im1.shape[1])
     vec2 = im2.reshape(im2.shape[0] * im2.shape[1])
     # compute the normalised difference index
-    temp = np.divide(vec1[~vec_mask] - vec2[~vec_mask],
-                     vec1[~vec_mask] + vec2[~vec_mask])
+    temp = np.divide(
+        vec1[~vec_mask] - vec2[~vec_mask], vec1[~vec_mask] + vec2[~vec_mask]
+    )
     vec_nd[~vec_mask] = temp
     # reshape into image
     im_nd = vec_nd.reshape(im1.shape[0], im1.shape[1])
 
     return im_nd
-    
+
+
 def image_std(image, radius):
     """
-    Calculates the standard deviation of an image, using a moving window of 
+    Calculates the standard deviation of an image, using a moving window of
     specified radius. Uses astropy's convolution library'
-    
+
     Arguments:
     -----------
     image: np.array
         2D array containing the pixel intensities of a single-band image
     radius: int
-        radius defining the moving window used to calculate the standard deviation. 
+        radius defining the moving window used to calculate the standard deviation.
         For example, radius = 1 will produce a 3x3 moving window.
-        
-    Returns:    
+
+    Returns:
     -----------
     win_std: np.array
         2D array containing the standard deviation of the image
-        
-    """  
-    
+
+    """
+
     # convert to float
     image = image.astype(float)
     # first pad the image
-    image_padded = np.pad(image, radius, 'reflect')
+    image_padded = np.pad(image, radius, "reflect")
     # window size
-    win_rows, win_cols = radius*2 + 1, radius*2 + 1
+    win_rows, win_cols = radius * 2 + 1, radius * 2 + 1
     # calculate std with uniform filters
-    win_mean = convolve(image_padded, np.ones((win_rows,win_cols)), boundary='extend',
-                        normalize_kernel=True, nan_treatment='interpolate', preserve_nan=True)
-    win_sqr_mean = convolve(image_padded**2, np.ones((win_rows,win_cols)), boundary='extend',
-                        normalize_kernel=True, nan_treatment='interpolate', preserve_nan=True)
+    win_mean = convolve(
+        image_padded,
+        np.ones((win_rows, win_cols)),
+        boundary="extend",
+        normalize_kernel=True,
+        nan_treatment="interpolate",
+        preserve_nan=True,
+    )
+    win_sqr_mean = convolve(
+        image_padded**2,
+        np.ones((win_rows, win_cols)),
+        boundary="extend",
+        normalize_kernel=True,
+        nan_treatment="interpolate",
+        preserve_nan=True,
+    )
     win_var = win_sqr_mean - win_mean**2
     win_std = np.sqrt(win_var)
     # remove padding
@@ -243,28 +269,29 @@ def image_std(image, radius):
 
     return win_std
 
+
 def mask_raster(fn, mask):
     """
     Masks a .tif raster using GDAL.
-    
+
     Arguments:
     -----------
     fn: str
         filepath + filename of the .tif raster
     mask: np.array
         array of boolean where True indicates the pixels that are to be masked
-        
-    Returns:    
+
+    Returns:
     -----------
     Overwrites the .tif file directly
-        
-    """ 
-    
+
+    """
+
     # open raster
     raster = gdal.Open(fn, gdal.GA_Update)
     # mask raster
     for i in range(raster.RasterCount):
-        out_band = raster.GetRasterBand(i+1)
+        out_band = raster.GetRasterBand(i + 1)
         out_data = out_band.ReadAsArray()
         out_band.SetNoDataValue(0)
         no_data_value = out_band.GetNoDataValue()
@@ -277,6 +304,7 @@ def mask_raster(fn, mask):
 ###################################################################################################
 # UTILITIES
 ###################################################################################################
+
 
 def create_folder_structure(im_folder, satname):
     """
@@ -298,29 +326,31 @@ def create_folder_structure(im_folder, satname):
     """
 
     # one folder for the metadata (common to all satellites)
-    filepaths = [os.path.join(im_folder, satname, 'meta')]
+    filepaths = [os.path.join(im_folder, satname, "meta")]
     # subfolders depending on satellite mission
-    if satname == 'L5':
-        filepaths.append(os.path.join(im_folder, satname, 'ms'))
-        filepaths.append(os.path.join(im_folder, satname, 'mask'))
-    elif satname in ['L7','L8','L9']:
-        filepaths.append(os.path.join(im_folder, satname, 'ms'))
-        filepaths.append(os.path.join(im_folder, satname, 'pan'))
-        filepaths.append(os.path.join(im_folder, satname, 'mask'))
-    elif satname in ['S2']:
-        filepaths.append(os.path.join(im_folder, satname, 'ms'))
-        filepaths.append(os.path.join(im_folder, satname, 'swir'))
-        filepaths.append(os.path.join(im_folder, satname, 'mask'))
+    if satname == "L5":
+        filepaths.append(os.path.join(im_folder, satname, "ms"))
+        filepaths.append(os.path.join(im_folder, satname, "mask"))
+    elif satname in ["L7", "L8", "L9"]:
+        filepaths.append(os.path.join(im_folder, satname, "ms"))
+        filepaths.append(os.path.join(im_folder, satname, "pan"))
+        filepaths.append(os.path.join(im_folder, satname, "mask"))
+    elif satname in ["S2"]:
+        filepaths.append(os.path.join(im_folder, satname, "ms"))
+        filepaths.append(os.path.join(im_folder, satname, "swir"))
+        filepaths.append(os.path.join(im_folder, satname, "mask"))
     # create the subfolders if they don't exist already
     for fp in filepaths:
-        if not os.path.exists(fp): os.makedirs(fp)
+        if not os.path.exists(fp):
+            os.makedirs(fp)
 
     return filepaths
 
-def get_filepath(inputs,satname):
+
+def get_filepath(inputs, satname):
     """
     Create filepath to the different folders containing the satellite images.
-    
+
     KV WRL 2018
 
     Arguments:
@@ -337,13 +367,13 @@ def get_filepath(inputs,satname):
             [151.3, -33.7]]]
             ```
         'dates': list of str
-            list that contains 2 strings with the initial and final dates in 
+            list that contains 2 strings with the initial and final dates in
             format 'yyyy-mm-dd':
             ```
             dates = ['1987-01-01', '2018-01-01']
             ```
         'sat_list': list of str
-            list that contains the names of the satellite missions to include: 
+            list that contains the names of the satellite missions to include:
             ```
             sat_list = ['L5', 'L7', 'L8', 'L9', 'S2']
             ```
@@ -351,41 +381,42 @@ def get_filepath(inputs,satname):
             filepath to the directory where the images are downloaded
     satname: str
         short name of the satellite mission ('L5','L7','L8','S2')
-                
-    Returns:    
+
+    Returns:
     -----------
     filepath: str or list of str
         contains the filepath(s) to the folder(s) containing the satellite images
-    
-    """     
-    
-    sitename = inputs['sitename']
-    filepath_data = inputs['filepath']
+
+    """
+
+    sitename = inputs["sitename"]
+    filepath_data = inputs["filepath"]
     # access the images
-    if satname == 'L5':
+    if satname == "L5":
         # access downloaded Landsat 5 images
-        fp_ms = os.path.join(filepath_data, sitename, satname, 'ms')
-        fp_mask = os.path.join(filepath_data, sitename, satname, 'mask')
+        fp_ms = os.path.join(filepath_data, sitename, satname, "ms")
+        fp_mask = os.path.join(filepath_data, sitename, satname, "mask")
         filepath = [fp_ms, fp_mask]
-    elif satname in ['L7','L8','L9']:
+    elif satname in ["L7", "L8", "L9"]:
         # access downloaded Landsat 7 images
-        fp_ms = os.path.join(filepath_data, sitename, satname, 'ms')
-        fp_pan = os.path.join(filepath_data, sitename, satname, 'pan')
-        fp_mask = os.path.join(filepath_data, sitename, satname, 'mask')
+        fp_ms = os.path.join(filepath_data, sitename, satname, "ms")
+        fp_pan = os.path.join(filepath_data, sitename, satname, "pan")
+        fp_mask = os.path.join(filepath_data, sitename, satname, "mask")
         filepath = [fp_ms, fp_pan, fp_mask]
-    elif satname == 'S2':
+    elif satname == "S2":
         # access downloaded Sentinel 2 images
-        fp_ms = os.path.join(filepath_data, sitename, satname, 'ms')
-        fp_swir = os.path.join(filepath_data, sitename, satname, 'swir')
-        fp_mask = os.path.join(filepath_data, sitename, satname, 'mask')
+        fp_ms = os.path.join(filepath_data, sitename, satname, "ms")
+        fp_swir = os.path.join(filepath_data, sitename, satname, "swir")
+        fp_mask = os.path.join(filepath_data, sitename, satname, "mask")
         filepath = [fp_ms, fp_swir, fp_mask]
-            
+
     return filepath
-    
+
+
 def get_filenames(filename, filepath, satname):
     """
     Creates filepath + filename for all the bands belonging to the same image.
-    
+
     KV WRL 2018
 
     Arguments:
@@ -395,99 +426,107 @@ def get_filenames(filename, filepath, satname):
     filepath: str or list of str
         contains the filepath(s) to the folder(s) containing the satellite images
     satname: str
-        short name of the satellite mission       
-        
-    Returns:    
+        short name of the satellite mission
+
+    Returns:
     -----------
     fn: str or list of str
         contains the filepath + filenames to access the satellite image
-        
-    """     
-    
-    if satname == 'L5':
-        fn_mask = filename.replace('ms.tif','mask.tif')
-        fn = [os.path.join(filepath[0], filename),
-              os.path.join(filepath[1], fn_mask)]
-    if satname in ['L7','L8','L9']:
-        fn_pan = filename.replace('ms.tif','pan.tif')
-        fn_mask = filename.replace('ms.tif','mask.tif')
-        fn = [os.path.join(filepath[0], filename),
-              os.path.join(filepath[1], fn_pan),
-              os.path.join(filepath[2], fn_mask)]
-    if satname == 'S2':
-        fn_swir = filename.replace('_ms','_swir')
-        fn_mask = filename.replace('_ms','_mask')
-        fn = [os.path.join(filepath[0], filename),
-              os.path.join(filepath[1], fn_swir),
-              os.path.join(filepath[2], fn_mask)]
-        
+
+    """
+
+    if satname == "L5":
+        fn_mask = filename.replace("ms.tif", "mask.tif")
+        fn = [os.path.join(filepath[0], filename), os.path.join(filepath[1], fn_mask)]
+    if satname in ["L7", "L8", "L9"]:
+        fn_pan = filename.replace("ms.tif", "pan.tif")
+        fn_mask = filename.replace("ms.tif", "mask.tif")
+        fn = [
+            os.path.join(filepath[0], filename),
+            os.path.join(filepath[1], fn_pan),
+            os.path.join(filepath[2], fn_mask),
+        ]
+    if satname == "S2":
+        fn_swir = filename.replace("_ms", "_swir")
+        fn_mask = filename.replace("_ms", "_mask")
+        fn = [
+            os.path.join(filepath[0], filename),
+            os.path.join(filepath[1], fn_swir),
+            os.path.join(filepath[2], fn_mask),
+        ]
+
     return fn
+
 
 def merge_output(output):
     """
     Function to merge the output dictionnary, which has one key per satellite mission
     into a dictionnary containing all the shorelines and dates ordered chronologically.
-    
+
     Arguments:
     -----------
     output: dict
-        contains the extracted shorelines and corresponding dates, organised by 
+        contains the extracted shorelines and corresponding dates, organised by
         satellite mission
-    
-    Returns:    
+
+    Returns:
     -----------
     output_all: dict
         contains the extracted shorelines in a single list sorted by date
-    
-    """     
-    
+
+    """
+
     # initialize output dict
     output_all = dict([])
     satnames = list(output.keys())
     for key in output[satnames[0]].keys():
         output_all[key] = []
     # create extra key for the satellite name
-    output_all['satname'] = []
+    output_all["satname"] = []
     # fill the output dict
     for satname in list(output.keys()):
         for key in output[satnames[0]].keys():
             output_all[key] = output_all[key] + output[satname][key]
-        output_all['satname'] = output_all['satname'] + [_ for _ in np.tile(satname,
-                  len(output[satname]['dates']))]
+        output_all["satname"] = output_all["satname"] + [
+            _ for _ in np.tile(satname, len(output[satname]["dates"]))
+        ]
     # sort chronologically
-    idx_sorted = sorted(range(len(output_all['dates'])), key=output_all['dates'].__getitem__)
+    idx_sorted = sorted(
+        range(len(output_all["dates"])), key=output_all["dates"].__getitem__
+    )
     for key in output_all.keys():
         output_all[key] = [output_all[key][i] for i in idx_sorted]
 
     return output_all
 
+
 def remove_duplicates(output):
     """
-    Function to remove from the output dictionnary entries containing shorelines for 
-    the same date and satellite mission. This happens when there is an overlap 
+    Function to remove from the output dictionnary entries containing shorelines for
+    the same date and satellite mission. This happens when there is an overlap
     between adjacent satellite images.
-    
+
     KV WRL 2020
-    
+
     Arguments:
     -----------
         output: dict
             contains output dict with shoreline and metadata
-        
-    Returns:    
+
+    Returns:
     -----------
         output_no_duplicates: dict
             contains the updated dict where duplicates have been removed
-        
+
     """
     # remove duplicates
-    dates = output['dates'].copy()
+    dates = output["dates"].copy()
     # find the pairs of images that are within 5 minutes of each other
-    time_delta = 5*60 # 5 minutes in seconds
+    time_delta = 5 * 60  # 5 minutes in seconds
     pairs = []
-    for i,date in enumerate(dates):
+    for i, date in enumerate(dates):
         # dummy value so it does not match it again
-        dates[i] = pytz.utc.localize(datetime(1,1,1) + timedelta(days=i+1))
+        dates[i] = pytz.utc.localize(datetime(1, 1, 1) + timedelta(days=i + 1))
         # calculate time difference
         time_diff = np.array([np.abs((date - _).total_seconds()) for _ in dates])
         # find the matching times and add to pairs list
@@ -496,8 +535,8 @@ def remove_duplicates(output):
             continue
         else:
             idx_dup = np.where(boolvec)[0][0]
-            pairs.append([i,idx_dup])
-            
+            pairs.append([i, idx_dup])
+
     # if there are duplicates, only keep the longest shoreline
     if len(pairs) > 0:
         # initialise variables
@@ -506,32 +545,35 @@ def remove_duplicates(output):
         # for each pair
         for pair in pairs:
             # check if any of the shorelines are empty
-            empty_bool = [(len(output['shorelines'][_]) < 2) for _ in pair]
-            if np.all(empty_bool): # if both empty remove both
+            empty_bool = [(len(output["shorelines"][_]) < 2) for _ in pair]
+            if np.all(empty_bool):  # if both empty remove both
                 idx_remove.append(pair[0])
                 idx_remove.append(pair[1])
-            elif np.any(empty_bool): # if one empty remove that one
+            elif np.any(empty_bool):  # if one empty remove that one
                 idx_remove.append(pair[np.where(empty_bool)[0][0]])
-            else: # remove the shorter shoreline and keep the longer one
-                sl0 = geometry.LineString(output['shorelines'][pair[0]]) 
-                sl1 = geometry.LineString(output['shorelines'][pair[1]])
-                if sl0.length >= sl1.length: idx_remove.append(pair[1])
-                else: idx_remove.append(pair[0])
+            else:  # remove the shorter shoreline and keep the longer one
+                sl0 = geometry.LineString(output["shorelines"][pair[0]])
+                sl1 = geometry.LineString(output["shorelines"][pair[1]])
+                if sl0.length >= sl1.length:
+                    idx_remove.append(pair[1])
+                else:
+                    idx_remove.append(pair[0])
         # create a new output structure with all the duplicates removed
         idx_remove = sorted(idx_remove)
-        idx_all = np.linspace(0, len(dates)-1, len(dates)).astype(int)
-        idx_keep = list(np.where(~np.isin(idx_all,idx_remove))[0])        
+        idx_all = np.linspace(0, len(dates) - 1, len(dates)).astype(int)
+        idx_keep = list(np.where(~np.isin(idx_all, idx_remove))[0])
         for key in output.keys():
             output_no_duplicates[key] = [output[key][i] for i in idx_keep]
-        print('%d duplicates' % len(idx_remove))
-        return output_no_duplicates 
-    else: 
-        print('0 duplicates')
+        print("%d duplicates" % len(idx_remove))
+        return output_no_duplicates
+    else:
+        print("0 duplicates")
         return output
+
 
 def remove_inaccurate_georef(output, accuracy):
     """
-    Function to remove from the output dictionnary entries containing shorelines 
+    Function to remove from the output dictionnary entries containing shorelines
     that were mapped on images with inaccurate georeferencing:
         - RMSE > accuracy for Landsat images
         - failed geometric test for Sentinel images (flagged with -1)
@@ -551,22 +593,27 @@ def remove_inaccurate_georef(output, accuracy):
     """
 
     # find indices of shorelines to be removed
-    idx = np.where(~np.logical_or(np.array(output['geoaccuracy']) == -1,
-                                  np.array(output['geoaccuracy']) >= accuracy))[0]
+    idx = np.where(
+        ~np.logical_or(
+            np.array(output["geoaccuracy"]) == -1,
+            np.array(output["geoaccuracy"]) >= accuracy,
+        )
+    )[0]
     # idx = np.where(~(np.array(output['geoaccuracy']) >= accuracy))[0]
     output_filtered = dict([])
     for key in output.keys():
         output_filtered[key] = [output[key][i] for i in idx]
-    print('%d bad georef' % (len(output['geoaccuracy']) - len(idx)))
+    print("%d bad georef" % (len(output["geoaccuracy"]) - len(idx)))
     return output_filtered
+
 
 def get_closest_datapoint(dates, dates_ts, values_ts):
     """
     Extremely efficient script to get closest data point to a set of dates from a very
     long time-series (e.g., 15-minutes tide data, or hourly wave data)
-    
+
     Make sure that dates and dates_ts are in the same timezone (also aware or naive)
-    
+
     KV WRL 2020
 
     Arguments:
@@ -577,97 +624,241 @@ def get_closest_datapoint(dates, dates_ts, values_ts):
         dates of the long time-series
     values_ts: np.array
         array with the values of the long time-series (tides, waves, etc...)
-        
-    Returns:    
+
+    Returns:
     -----------
     values: np.array
         values corresponding to the input dates
-        
+
     """
-    
+
     # check if the time-series cover the dates
-    if dates[0] < dates_ts[0] or dates[-1] > dates_ts[-1]: 
-        raise Exception('Time-series do not cover the range of your input dates')
-    
+    if dates[0] < dates_ts[0] or dates[-1] > dates_ts[-1]:
+        raise Exception("Time-series do not cover the range of your input dates")
+
     # get closest point to each date (no interpolation)
     temp = []
+
     def find(item, lst):
         start = 0
         start = lst.index(item, start)
         return start
-    for i,date in enumerate(dates):
-        print('\rExtracting closest points: %d%%' % int((i+1)*100/len(dates)), end='')
-        temp.append(values_ts[find(min(item for item in dates_ts if item > date), dates_ts)])
+
+    for i, date in enumerate(dates):
+        print(
+            "\rExtracting closest points: %d%%" % int((i + 1) * 100 / len(dates)),
+            end="",
+        )
+        temp.append(
+            values_ts[find(min(item for item in dates_ts if item > date), dates_ts)]
+        )
     values = np.array(temp)
-    
+
     return values
+
 
 ###################################################################################################
 # GEODATAFRAMES AND READ/WRITE GEOJSON
 ###################################################################################################
-    
+
+
 def polygon_from_kml(fn):
     """
     Extracts coordinates from a .kml file.
-    
+
     KV WRL 2018
 
     Arguments:
     -----------
     fn: str
-        filepath + filename of the kml file to be read          
-                
-    Returns:    
+        filepath + filename of the kml file to be read
+
+    Returns:
     -----------
     polygon: list
         coordinates extracted from the .kml file
-        
-    """    
-    
+
+    """
+
     # read .kml file
     with open(fn) as kmlFile:
-        doc = kmlFile.read() 
+        doc = kmlFile.read()
     # parse to find coordinates field
-    str1 = '<coordinates>'
-    str2 = '</coordinates>'
-    subdoc = doc[doc.find(str1)+len(str1):doc.find(str2)]
-    coordlist = subdoc.split('\n')
+    str1 = "<coordinates>"
+    str2 = "</coordinates>"
+    subdoc = doc[doc.find(str1) + len(str1) : doc.find(str2)]
+    coordlist = subdoc.split("\n")
     # read coordinates
     polygon = []
-    for i in range(1,len(coordlist)-1):
-        polygon.append([float(coordlist[i].split(',')[0]), float(coordlist[i].split(',')[1])])
-        
+    for i in range(1, len(coordlist) - 1):
+        polygon.append(
+            [float(coordlist[i].split(",")[0]), float(coordlist[i].split(",")[1])]
+        )
+
     return [polygon]
+
 
 def transects_from_geojson(filename):
     """
     Reads transect coordinates from a .geojson file.
-    
+
     Arguments:
     -----------
     filename: str
         contains the path and filename of the geojson file to be loaded
-        
-    Returns:    
+
+    Returns:
     -----------
     transects: dict
         contains the X and Y coordinates of each transect
-        
-    """  
-    
+
+    """
+
     gdf = gpd.read_file(filename)
     transects = dict([])
     for i in gdf.index:
-        transects[gdf.loc[i,'name']] = np.array(gdf.loc[i,'geometry'].coords)
-        
-    print('%d transects have been loaded' % len(transects.keys()))
+        transects[gdf.loc[i, "name"]] = np.array(gdf.loc[i, "geometry"].coords)
+
+    print("%d transects have been loaded" % len(transects.keys()))
 
     return transects
 
+
+def create_geometry(
+    geomtype: str, shoreline: List[List[float]]
+) -> Optional[Union[geometry.LineString, geometry.MultiPoint]]:
+    """
+    Creates geometry based on geomtype and shoreline data.
+
+    Parameters:
+    -----------
+    geomtype: str
+        Type of geometry ('lines' or 'points').
+    shoreline: List[List[float]]
+        List of shoreline coordinates.
+        Ex: [[0,1],[1,0]]
+
+    Returns:
+    --------
+    Union[geometry.LineString, geometry.MultiPoint, None]
+        The created geometry or None if invalid.
+    """
+    if geomtype == "lines" and len(shoreline) >= 2:
+        return geometry.LineString(shoreline)
+    elif geomtype == "points" and len(shoreline) > 0:
+        return geometry.MultiPoint([(coord[0], coord[1]) for coord in shoreline])
+    return None
+
+
+def create_gdf(
+    shoreline: List[List[float]],
+    date: datetime,
+    satname: str,
+    geoaccuracy: float,
+    cloud_cover: float,
+    idx: int,
+    geomtype: str,
+) -> Optional[gpd.GeoDataFrame]:
+    """
+    Creates a GeoDataFrame for a given shoreline and its attributes.
+
+    Parameters:
+    -----------
+    shoreline: List[List[float]]
+        List of shoreline coordinates.
+    date: datetime
+        Date associated with the shoreline.
+    satname: str
+        Satellite name.
+    geoaccuracy: float
+        Geo accuracy value.
+    cloud_cover: float
+        Cloud cover value.
+    idx: int
+        Index for the GeoDataFrame.
+    geomtype: str
+        Type of geometry ('lines' or 'points').
+
+    Returns:
+    --------
+    Optional[gpd.GeoDataFrame]
+        The created GeoDataFrame or None if invalid.
+    """
+    geom = create_geometry(geomtype, shoreline)
+    if geom:
+        gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(geom))
+        gdf.index = [idx]
+        gdf.loc[idx, "date"] = date.strftime("%Y-%m-%d %H:%M:%S")
+        gdf.loc[idx, "satname"] = satname
+        gdf.loc[idx, "geoaccuracy"] = geoaccuracy
+        gdf.loc[idx, "cloud_cover"] = cloud_cover
+        return gdf
+    return None
+
+
+def output_to_gdf(
+    output: Dict[
+        str, Union[List[List[List[float]]], List[datetime], List[str], List[float]]
+    ],
+    geomtype: str,
+) -> gpd.GeoDataFrame:
+    """
+    Converts output data to a GeoDataFrame based on the specified geomtype.
+
+    Parameters:
+    -----------
+    output : Dict[str, Union[List[List[List[float]]], List[datetime], List[str], List[float]]]
+        A dictionary containing:
+        - 'shorelines': List of shorelines where each shoreline is a list of coordinates.
+        - 'dates': List of datetime objects associated with each shoreline.
+        - 'satname': List of satellite names for each shoreline.
+        - 'geoaccuracy': List of geo accuracy values for each shoreline.
+        - 'cloud_cover': List of cloud cover values for each shoreline.
+    geomtype : str
+        Type of geometry to be created. Must be either 'lines' or 'points'.
+
+    Returns:
+    --------
+    gpd.GeoDataFrame
+        A GeoDataFrame containing the consolidated data from the output dictionary.
+
+    Raises:
+    -------
+    Exception
+        If the provided geomtype is not 'lines' or 'points'.
+    """
+    if geomtype not in ["lines", "points"]:
+        raise Exception(
+            f"geomtype {geomtype} is not an option, choose between lines or points"
+        )
+
+    # create a list of geodataframes and filter out geodataframes that didn't contain shorelines
+    # we use filter(None,shoreline_gdf) to not include any empty shorelines which is indicated by create_gdf returning None
+    gdf_list = list(
+        filter(
+            None,
+            map(
+                lambda idx: create_gdf(
+                    output["shorelines"][idx],
+                    output["dates"][idx],
+                    output["satname"][idx],
+                    output["geoaccuracy"][idx],
+                    output["cloud_cover"][idx],
+                    idx,
+                    geomtype,
+                ),
+                range(len(output["shorelines"])),
+            ),
+        )
+    )
+
+    return pd.concat(gdf_list, ignore_index=True)
+
+
 def output_to_gdf(output, geomtype):
     """
-    Saves the mapped shorelines as a gpd.GeoDataFrame    
-    
+    Saves the mapped shorelines as a gpd.GeoDataFrame
+
     KV WRL 2018
 
     Arguments:
@@ -675,39 +866,44 @@ def output_to_gdf(output, geomtype):
     output: dict
         contains the coordinates of the mapped shorelines + attributes
     geomtype: str
-        'lines' for LineString and 'points' for Multipoint geometry      
-                
-    Returns:    
+        'lines' for LineString and 'points' for Multipoint geometry
+
+    Returns:
     -----------
     gdf_all: gpd.GeoDataFrame
-        contains the shorelines + attirbutes
-  
-    """    
+        contains the shorelines + attributes
+
+    """
     # loop through the mapped shorelines
     gdf_list = []
-    for i in range(len(output['shorelines'])):
-        # skip if there shoreline is empty 
-        if len(output['shorelines'][i]) == 0:
+    for i in range(len(output["shorelines"])):
+        # skip if there shoreline is empty
+        if len(output["shorelines"][i]) == 0:
             continue
         else:
             # save the geometry depending on the linestyle
-            if geomtype == 'lines':
+            if geomtype == "lines":
                 # linestrings must consist of 2 or more points
-                if len(output['shorelines'][i]) < 2:
+                if len(output["shorelines"][i]) < 2:
                     continue
-                geom = geometry.LineString(output['shorelines'][i])
-            elif geomtype == 'points':
-                coords = output['shorelines'][i]
-                geom = geometry.MultiPoint([(coords[_,0], coords[_,1]) for _ in range(coords.shape[0])])
+                geom = geometry.LineString(output["shorelines"][i])
+            elif geomtype == "points":
+                coords = output["shorelines"][i]
+                geom = geometry.MultiPoint(
+                    [(coords[_, 0], coords[_, 1]) for _ in range(coords.shape[0])]
+                )
             else:
-                raise Exception('geomtype %s is not an option, choose between lines or points'%geomtype)
+                raise Exception(
+                    "geomtype %s is not an option, choose between lines or points"
+                    % geomtype
+                )
             # save into geodataframe with attributes
             gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(geom))
             gdf.index = [i]
-            gdf.loc[i,'date'] = output['dates'][i].strftime('%Y-%m-%d %H:%M:%S')
-            gdf.loc[i,'satname'] = output['satname'][i]
-            gdf.loc[i,'geoaccuracy'] = output['geoaccuracy'][i]
-            gdf.loc[i,'cloud_cover'] = output['cloud_cover'][i]
+            gdf.loc[i, "date"] = output["dates"][i].strftime("%Y-%m-%d %H:%M:%S")
+            gdf.loc[i, "satname"] = output["satname"][i]
+            gdf.loc[i, "geoaccuracy"] = output["geoaccuracy"][i]
+            gdf.loc[i, "cloud_cover"] = output["cloud_cover"][i]
             gdf_list.append(gdf)
 
     # concatenate all GeoDataFrames in the list into a single GeoDataFrame
@@ -719,7 +915,7 @@ def output_to_gdf(output, geomtype):
     # counter = 0
     # gdf_all = None
     # for i in range(len(output['shorelines'])):
-    #     # skip if there shoreline is empty 
+    #     # skip if there shoreline is empty
     #     if len(output['shorelines'][i]) == 0:
     #         continue
     #     else:
@@ -747,26 +943,27 @@ def output_to_gdf(output, geomtype):
     #         else:
     #             gdf_all = gdf_all.append(gdf)
     #         counter = counter + 1
-            
+
     # return gdf_all
+
 
 def transects_to_gdf(transects):
     """
-    Saves the shore-normal transects as a gpd.GeoDataFrame    
-    
+    Saves the shore-normal transects as a gpd.GeoDataFrame
+
     KV WRL 2018
 
     Arguments:
     -----------
     transects: dict
-        contains the coordinates of the transects          
-                
-    Returns:    
+        contains the coordinates of the transects
+
+    Returns:
     -----------
     gdf_all: gpd.GeoDataFrame
 
-        
-    """  
+
+    """
     # loop through the mapped shorelines
     gdf_list = []
     for i, key in enumerate(list(transects.keys())):
@@ -774,14 +971,13 @@ def transects_to_gdf(transects):
         geom = geometry.LineString(transects[key])
         gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(geom))
         gdf.index = [i]
-        gdf.loc[i,'name'] = key
+        gdf.loc[i, "name"] = key
         gdf_list.append(gdf)
 
     # concatenate all GeoDataFrames in the list into a single GeoDataFrame
     gdf_all = pd.concat(gdf_list, ignore_index=True)
 
     return gdf_all
-
 
     # # loop through the mapped shorelines
     # for i,key in enumerate(list(transects.keys())):
@@ -795,129 +991,140 @@ def transects_to_gdf(transects):
     #         gdf_all = gdf
     #     else:
     #         gdf_all = gdf_all.append(gdf)
-            
+
     # return gdf_all
+
 
 def get_image_bounds(fn):
     """
     Returns a polygon with the bounds of the image in the .tif file
-     
+
     KV WRL 2020
 
     Arguments:
     -----------
     fn: str
-        path to the image (.tif file)         
-                
-    Returns:    
+        path to the image (.tif file)
+
+    Returns:
     -----------
     bounds_polygon: shapely.geometry.Polygon
         polygon with the image bounds
-        
+
     """
-    
-    # nested functions to get the extent 
+
+    # nested functions to get the extent
     # copied from https://gis.stackexchange.com/questions/57834/how-to-get-raster-corner-coordinates-using-python-gdal-bindings
-    def GetExtent(gt,cols,rows):
-        'Return list of corner coordinates from a geotransform'
-        ext=[]
-        xarr=[0,cols]
-        yarr=[0,rows]
+    def GetExtent(gt, cols, rows):
+        "Return list of corner coordinates from a geotransform"
+        ext = []
+        xarr = [0, cols]
+        yarr = [0, rows]
         for px in xarr:
             for py in yarr:
-                x=gt[0]+(px*gt[1])+(py*gt[2])
-                y=gt[3]+(px*gt[4])+(py*gt[5])
-                ext.append([x,y])
+                x = gt[0] + (px * gt[1]) + (py * gt[2])
+                y = gt[3] + (px * gt[4]) + (py * gt[5])
+                ext.append([x, y])
             yarr.reverse()
         return ext
-    
+
     # load .tif file and get bounds
     if not os.path.exists(fn):
         raise FileNotFoundError(f"{fn}")
     data = gdal.Open(fn, gdal.GA_ReadOnly)
     # Check if data is null meaning the open failed
     if data is None:
-        print("TIF file: ",fn, "cannot be opened" )
+        print("TIF file: ", fn, "cannot be opened")
         os.remove(fn)
         raise AttributeError
     else:
         gt = data.GetGeoTransform()
         cols = data.RasterXSize
         rows = data.RasterYSize
-        ext = GetExtent(gt,cols,rows)
-    
+        ext = GetExtent(gt, cols, rows)
+
     return geometry.Polygon(ext)
+
 
 def smallest_rectangle(polygon):
     """
     Converts a polygon to the smallest rectangle polygon with sides parallel
     to coordinate axes.
-     
+
     KV WRL 2020
 
     Arguments:
     -----------
-    polygon: list of coordinates 
+    polygon: list of coordinates
         pair of coordinates for 5 vertices, in clockwise order,
-        first and last points must match     
-                
-    Returns:    
+        first and last points must match
+
+    Returns:
     -----------
     polygon: list of coordinates
         smallest rectangle polygon
-        
+
     """
-    
+
     multipoints = geometry.Polygon(polygon[0])
     polygon_geom = multipoints.envelope
     coords_polygon = np.array(polygon_geom.exterior.coords)
     polygon_rect = [[[_[0], _[1]] for _ in coords_polygon]]
     return polygon_rect
 
-def compare_timeseries(ts,gt,key,settings):
+
+def compare_timeseries(ts, gt, key, settings):
     if key not in gt.keys():
-        raise Exception('transect name %s does not exist in grountruth file'%key)
+        raise Exception("transect name %s does not exist in grountruth file" % key)
     # remove nans
     chainage = np.array(ts[key])
     idx_nan = np.isnan(chainage)
-    dates_nonans = [ts['dates'][k].to_pydatetime() for k in np.where(~idx_nan)[0]]
-    satnames_nonans = [ts['satname'][k] for k in np.where(~idx_nan)[0]]
+    dates_nonans = [ts["dates"][k].to_pydatetime() for k in np.where(~idx_nan)[0]]
+    satnames_nonans = [ts["satname"][k] for k in np.where(~idx_nan)[0]]
     chain_nonans = chainage[~idx_nan]
     # define satellite and survey time-series
     chain_sat_dm = chain_nonans
-    chain_sur_dm = gt[key]['chainages']
+    chain_sur_dm = gt[key]["chainages"]
     # plot the time-series
-    fig= plt.figure(figsize=[15,8], tight_layout=True)
-    gs = gridspec.GridSpec(2,3)
-    ax0 = fig.add_subplot(gs[0,:])
-    ax0.grid(which='major',linestyle=':',color='0.5')
-    ax0.plot(gt[key]['dates'], chain_sur_dm,'-o',mfc='w',ms=3,label='in situ')
-    ax0.plot(dates_nonans, chain_sat_dm,'-o',mfc='w',ms=3,label='satellite')
-    ax0.set(title= 'Transect ' + key, xlim=[dates_nonans[0]-timedelta(days=30),
-                                            dates_nonans[-1]+timedelta(days=30)])#,ylim=sett['lims'])
-    ax0.legend(loc='upper left')
-    
+    fig = plt.figure(figsize=[15, 8], tight_layout=True)
+    gs = gridspec.GridSpec(2, 3)
+    ax0 = fig.add_subplot(gs[0, :])
+    ax0.grid(which="major", linestyle=":", color="0.5")
+    ax0.plot(gt[key]["dates"], chain_sur_dm, "-o", mfc="w", ms=3, label="in situ")
+    ax0.plot(dates_nonans, chain_sat_dm, "-o", mfc="w", ms=3, label="satellite")
+    ax0.set(
+        title="Transect " + key,
+        xlim=[
+            dates_nonans[0] - timedelta(days=30),
+            dates_nonans[-1] + timedelta(days=30),
+        ],
+    )  # ,ylim=sett['lims'])
+    ax0.legend(loc="upper left")
+
     # interpolate surveyed data around satellite data based on the parameters (min_days and max_days)
-    chain_int = np.nan*np.ones(len(dates_nonans))
-    for k,date in enumerate(dates_nonans):
+    chain_int = np.nan * np.ones(len(dates_nonans))
+    for k, date in enumerate(dates_nonans):
         # compute the days distance for each satellite date
-        days_diff = np.array([ (_ - date).days for _ in gt[key]['dates']])
+        days_diff = np.array([(_ - date).days for _ in gt[key]["dates"]])
         # if nothing within max_days put a nan
-        if np.min(np.abs(days_diff)) > settings['max_days']:
+        if np.min(np.abs(days_diff)) > settings["max_days"]:
             chain_int[k] = np.nan
         else:
             # if a point within min_days, take that point (no interpolation)
-            if np.min(np.abs(days_diff)) < settings['min_days']:
+            if np.min(np.abs(days_diff)) < settings["min_days"]:
                 idx_closest = np.where(np.abs(days_diff) == np.min(np.abs(days_diff)))
-                chain_int[k] = float(gt[key]['chainages'][idx_closest[0][0]])
-            else: # otherwise, between min_days and max_days, interpolate between the 2 closest points
+                chain_int[k] = float(gt[key]["chainages"][idx_closest[0][0]])
+            else:  # otherwise, between min_days and max_days, interpolate between the 2 closest points
                 if sum(days_diff > 0) == 0:
                     break
                 idx_after = np.where(days_diff > 0)[0][0]
                 idx_before = idx_after - 1
-                x = [gt[key]['dates'][idx_before].toordinal() , gt[key]['dates'][idx_after].toordinal()]
-                y = [gt[key]['chainages'][idx_before], gt[key]['chainages'][idx_after]]
-                f = interpolate.interp1d(x, y,bounds_error=True)
+                x = [
+                    gt[key]["dates"][idx_before].toordinal(),
+                    gt[key]["dates"][idx_after].toordinal(),
+                ]
+                y = [gt[key]["chainages"][idx_before], gt[key]["chainages"][idx_after]]
+                f = interpolate.interp1d(x, y, bounds_error=True)
                 try:
                     chain_int[k] = float(f(date.toordinal()))
                 except:
@@ -928,65 +1135,105 @@ def compare_timeseries(ts,gt,key,settings):
     chain_sur = chain_int[~idx_nan]
     dates_sat = [dates_nonans[k] for k in np.where(~idx_nan)[0]]
     satnames = [satnames_nonans[k] for k in np.where(~idx_nan)[0]]
-    if len(chain_sat) < 8 or len(chain_sur) < 8: 
-        return  chain_sat, chain_sur, satnames, fig
+    if len(chain_sat) < 8 or len(chain_sur) < 8:
+        return chain_sat, chain_sur, satnames, fig
     # error statistics
     slope, intercept, rvalue, pvalue, std_err = stats.linregress(chain_sur, chain_sat)
     R2 = rvalue**2
-    ax0.text(0,1,'R2 = %.2f'%R2,bbox=dict(boxstyle='square', facecolor='w', alpha=1),transform=ax0.transAxes)
+    ax0.text(
+        0,
+        1,
+        "R2 = %.2f" % R2,
+        bbox=dict(boxstyle="square", facecolor="w", alpha=1),
+        transform=ax0.transAxes,
+    )
     chain_error = chain_sat - chain_sur
-    rmse = np.sqrt(np.mean((chain_error)**2))
+    rmse = np.sqrt(np.mean((chain_error) ** 2))
     mean = np.mean(chain_error)
     std = np.std(chain_error)
-    q90 = np.percentile(np.abs(chain_error), 90)   
-    
+    q90 = np.percentile(np.abs(chain_error), 90)
+
     # 1:1 plot
-    ax1 = fig.add_subplot(gs[1,0])
-    ax1.axis('equal')
-    ax1.grid(which='major',linestyle=':',color='0.5')
-    for k,sat in enumerate(list(np.unique(satnames))):
+    ax1 = fig.add_subplot(gs[1, 0])
+    ax1.axis("equal")
+    ax1.grid(which="major", linestyle=":", color="0.5")
+    for k, sat in enumerate(list(np.unique(satnames))):
         idx = np.where([_ == sat for _ in satnames])[0]
-        ax1.plot(chain_sur[idx], chain_sat[idx], 'o', ms=4, mfc='C'+str(k),mec='C'+str(k), alpha=0.7, label=sat)
+        ax1.plot(
+            chain_sur[idx],
+            chain_sat[idx],
+            "o",
+            ms=4,
+            mfc="C" + str(k),
+            mec="C" + str(k),
+            alpha=0.7,
+            label=sat,
+        )
     ax1.legend(loc=4)
-    ax1.plot([ax1.get_xlim()[0], ax1.get_ylim()[1]],[ax1.get_xlim()[0], ax1.get_ylim()[1]],'k--',lw=2)
-    ax1.set(xlabel='survey [m]', ylabel='satellite [m]')   
+    ax1.plot(
+        [ax1.get_xlim()[0], ax1.get_ylim()[1]],
+        [ax1.get_xlim()[0], ax1.get_ylim()[1]],
+        "k--",
+        lw=2,
+    )
+    ax1.set(xlabel="survey [m]", ylabel="satellite [m]")
 
     # boxplots
-    ax2 = fig.add_subplot(gs[1,1])
+    ax2 = fig.add_subplot(gs[1, 1])
     data = []
     median_data = []
     n_data = []
     ax2.yaxis.grid()
-    for k,sat in enumerate(list(np.unique(satnames))):
+    for k, sat in enumerate(list(np.unique(satnames))):
         idx = np.where([_ == sat for _ in satnames])[0]
         data.append(chain_error[idx])
         median_data.append(np.median(chain_error[idx]))
         n_data.append(len(chain_error[idx]))
-    bp = ax2.boxplot(data,0,'k.', labels=list(np.unique(satnames)), patch_artist=True)
-    for median in bp['medians']:
-        median.set(color='k', linewidth=1.5)
-    for j,boxes in enumerate(bp['boxes']):
-        boxes.set(facecolor='C'+str(j))
-        ax2.text(j+1,median_data[j]+1, '%.1f' % median_data[j], horizontalalignment='center', fontsize=12)
-        ax2.text(j+1+0.35,median_data[j]+1, ('n=%.d' % int(n_data[j])), ha='center', va='center', fontsize=12,
-                 rotation='vertical')
-    ax2.set(ylabel='error [m]', ylim=settings['lims'])
-    
+    bp = ax2.boxplot(data, 0, "k.", labels=list(np.unique(satnames)), patch_artist=True)
+    for median in bp["medians"]:
+        median.set(color="k", linewidth=1.5)
+    for j, boxes in enumerate(bp["boxes"]):
+        boxes.set(facecolor="C" + str(j))
+        ax2.text(
+            j + 1,
+            median_data[j] + 1,
+            "%.1f" % median_data[j],
+            horizontalalignment="center",
+            fontsize=12,
+        )
+        ax2.text(
+            j + 1 + 0.35,
+            median_data[j] + 1,
+            ("n=%.d" % int(n_data[j])),
+            ha="center",
+            va="center",
+            fontsize=12,
+            rotation="vertical",
+        )
+    ax2.set(ylabel="error [m]", ylim=settings["lims"])
+
     # histogram
-    ax3 = fig.add_subplot(gs[1,2])
-    ax3.grid(which='major',linestyle=':',color='0.5')
-    ax3.axvline(x=0, ls='--', lw=1.5, color='k')
-    binwidth = settings['binwidth']
+    ax3 = fig.add_subplot(gs[1, 2])
+    ax3.grid(which="major", linestyle=":", color="0.5")
+    ax3.axvline(x=0, ls="--", lw=1.5, color="k")
+    binwidth = settings["binwidth"]
     bins = np.arange(min(chain_error), max(chain_error) + binwidth, binwidth)
-    density = plt.hist(chain_error, bins=bins, density=True, color='0.6', edgecolor='k', alpha=0.5)
+    density = plt.hist(
+        chain_error, bins=bins, density=True, color="0.6", edgecolor="k", alpha=0.5
+    )
     mu, std = stats.norm.fit(chain_error)
     pval = stats.normaltest(chain_error)[1]
     xlims = ax3.get_xlim()
     x = np.linspace(xlims[0], xlims[1], 100)
     p = stats.norm.pdf(x, mu, std)
-    ax3.plot(x, p, 'r-', linewidth=1)
-    ax3.set(xlabel='error [m]', ylabel='pdf', xlim=settings['lims'])
-    str_stats = ' rmse = %.1f\n mean = %.1f\n std = %.1f\n q90 = %.1f' % (rmse, mean, std, q90)
-    ax3.text(0, 0.98, str_stats,va='top', transform=ax3.transAxes)    
-    
+    ax3.plot(x, p, "r-", linewidth=1)
+    ax3.set(xlabel="error [m]", ylabel="pdf", xlim=settings["lims"])
+    str_stats = " rmse = %.1f\n mean = %.1f\n std = %.1f\n q90 = %.1f" % (
+        rmse,
+        mean,
+        std,
+        q90,
+    )
+    ax3.text(0, 0.98, str_stats, va="top", transform=ax3.transAxes)
+
     return chain_sat, chain_sur, satnames, fig
