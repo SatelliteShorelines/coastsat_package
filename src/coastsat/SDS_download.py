@@ -170,6 +170,7 @@ def retrieve_images(
     cloud_threshold: float = 99.9,
     cloud_mask_issue: bool = False,
     save_jpg: bool = True,
+    apply_cloud_mask: bool = True,
 ):
     """
     Downloads all images from Landsat 5, Landsat 7, Landsat 8 and Sentinel-2
@@ -404,6 +405,7 @@ def retrieve_images(
                             cloud_mask_issue=cloud_mask_issue,
                             filepath_data=inputs["filepath"],
                             collection=inputs["landsat_collection"],
+                            apply_cloud_mask=apply_cloud_mask,
                         )
                     # write metadata
                     with open(
@@ -529,6 +531,7 @@ def retrieve_images(
                             cloud_mask_issue=cloud_mask_issue,
                             filepath_data=inputs["filepath"],
                             collection=inputs["landsat_collection"],
+                            apply_cloud_mask=apply_cloud_mask,
                         )
                 # =============================================================================================#
                 # Sentinel-2 download
@@ -642,6 +645,7 @@ def retrieve_images(
                             cloud_mask_issue=cloud_mask_issue,
                             filepath_data=inputs["filepath"],
                             collection=inputs["landsat_collection"],
+                            apply_cloud_mask=apply_cloud_mask,
                         )
             except Exception as error:
                 raise error

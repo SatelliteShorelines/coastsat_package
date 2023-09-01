@@ -681,12 +681,11 @@ def rescale_image_intensity(im, cloud_mask, prob_high):
 
     # reshape the 2D cloud mask into a 1D vector
     vec_mask = cloud_mask.reshape(im.shape[0] * im.shape[1])
-
     # if image contains several bands, stretch the contrast for each band
     if len(im.shape) > 2:
         # reshape into a vector
         vec = im.reshape(im.shape[0] * im.shape[1], im.shape[2])
-        # initiliase with NaN values
+        # # initiliase with NaN values
         vec_adj = np.ones((len(vec_mask), im.shape[2])) * np.nan
         # loop through the bands
         for i in range(im.shape[2]):
@@ -715,7 +714,12 @@ def rescale_image_intensity(im, cloud_mask, prob_high):
 
 
 def create_jpg(
-    im_ms: np.array, cloud_mask: np.array, date: str, satname: str, filepath: str
+    im_ms: np.array,
+    cloud_mask: np.array,
+    date: str,
+    satname: str,
+    filepath: str,
+    **kwargs,
 ) -> None:
     """
     Saves a .jpg file with the RGB image as well as the NIR and SWIR1 grayscale images.
@@ -740,10 +744,25 @@ def create_jpg(
         Saves a .jpg image corresponding to the preprocessed satellite image
 
     """
+    if "apply_cloud_mask" in kwargs:
+        print(kwargs["apply_cloud_mask"])
+
+    apply_cloud_mask = (
+        kwargs["apply_cloud_mask"] if "apply_cloud_mask" in kwargs else True
+    )
+    print(f"'im_nodata' in kwargs: {'im_nodata' in kwargs}")
+    print(f"not apply_cloud_mask: {not apply_cloud_mask}")
+    if not apply_cloud_mask and "im_nodata" in kwargs:
+        print(f"Applying no data mask instead of cloud mask")
+        mask = kwargs["im_nodata"]
+    else:
+        print(f"CLoud mask being applied")
+        mask = cloud_mask
+
     # rescale image intensity for display purposes
-    im_RGB = rescale_image_intensity(im_ms[:, :, [2, 1, 0]], cloud_mask, 99.9)
-    im_NIR = rescale_image_intensity(im_ms[:, :, 3], cloud_mask, 99.9)
-    im_SWIR = rescale_image_intensity(im_ms[:, :, 4], cloud_mask, 99.9)
+    im_RGB = rescale_image_intensity(im_ms[:, :, [2, 1, 0]], mask, 99.9)
+    im_NIR = rescale_image_intensity(im_ms[:, :, 3], mask, 99.9)
+    im_SWIR = rescale_image_intensity(im_ms[:, :, 4], mask, 99.9)
     # convert images to bytes so they can be saved
     im_RGB = img_as_ubyte(im_RGB)
     im_NIR = img_as_ubyte(im_NIR)
@@ -797,6 +816,7 @@ def save_single_jpg(
     NIR saved under data/preprocessed/NIR
     SWIR saved under data/preprocessed/SWIR
     """
+
     # create subfolder to store the jpg files
     jpg_directory = os.path.join(filepath_data, sitename, "jpg_files", "preprocessed")
     os.makedirs(jpg_directory, exist_ok=True)
@@ -814,6 +834,7 @@ def save_single_jpg(
         return
     # remove no data pixels from the cloud mask (for example L7 bands of no data should not be accounted for)
     cloud_mask_adv = np.logical_xor(cloud_mask, im_nodata)
+
     # compute updated cloud cover percentage (without no data pixels)
     cloud_cover = np.divide(
         sum(sum(cloud_mask_adv.astype(int))), (sum(sum((~im_nodata).astype(int))))
@@ -824,7 +845,11 @@ def save_single_jpg(
     # save .jpg with date and satellite in the title
     date = filename[:19]
     plt.ioff()  # turning interactive plotting off
-    create_jpg(im_ms, cloud_mask, date, satname, jpg_directory)
+    # get cloud mask parameter
+
+    create_jpg(
+        im_ms, cloud_mask, date, satname, jpg_directory, im_nodata=im_nodata, **kwargs
+    )
 
 
 def save_jpg(metadata, settings, **kwargs):
@@ -904,7 +929,15 @@ def save_jpg(metadata, settings, **kwargs):
             # save .jpg with date and satellite in the title
             date = filenames[i][:19]
             plt.ioff()  # turning interactive plotting off
-            create_jpg(im_ms, cloud_mask, date, satname, filepath_jpg)
+            create_jpg(
+                im_ms,
+                cloud_mask,
+                date,
+                satname,
+                filepath_jpg,
+                im_nodata=im_nodata,
+                **kwargs,
+            )
         print("")
     # print the location where the images have been saved
     print(
