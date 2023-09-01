@@ -35,133 +35,176 @@ from coastsat import SDS_tools
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
 
-def preprocess_satellite_L7_L8_L9(fn, satname, cloud_mask_issue, pan_off, im_QA):
-    """
-    Reads the L7, L8, L9 satellite images and preprocesses them.
+# def preprocess_satellite_L7_L8_L9(fn, satname, cloud_mask_issue, pan_off, im_QA):
+#     """
+#     Reads the L7, L8, L9 satellite images and preprocesses them.
 
-    Arguments:
+#     Arguments:
+#     -----------
+#     fn: list
+#         list of filenames, one filename for each band at different
+#         resolution (30m and 15m for Landsat 7-8-9)
+#     satname: str
+#         name of the satellite mission ('L7', 'L8' or 'L9')
+#     cloud_mask_issue: boolean
+#         True if there is an issue with the cloud mask and sand pixels are being masked on the images
+#     pan_off : boolean
+#         if True, disable panchromatic sharpening and ignore pan band
+#     im_QA: np.array
+#         2D array containing the QA band, from which the cloud_mask can be computed.
+
+#     Returns:
+#     -----------
+#     Tuple with the following elements:
+#     im_ms: np.array
+#         3D array containing the pansharpened/down-sampled bands (B,G,R,NIR,SWIR1)
+#     georef: np.array
+#         vector of 6 elements [Xtr, Xscale, Xshear, Ytr, Yshear, Yscale] defining the
+#         coordinates of the top-left pixel of the image
+#     cloud_mask: np.array
+#         2D cloud mask with True where cloud pixels are
+#     im_extra : np.array
+#         2D array containing the 15m resolution panchromatic band for Landsat 7, 8 and 9.
+#     im_nodata: np.array
+#         2D array with True where no data values (-inf) are located
+#     """
+
+#     # filepaths to .tif files
+#     fn_ms = fn[0]
+#     fn_pan = fn[1]
+#     fn_mask = fn[2]
+
+#     # read ms bands
+#     data = gdal.Open(fn_ms, gdal.GA_ReadOnly)
+#     georef = np.array(data.GetGeoTransform())
+#     bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
+#     im_ms = np.stack(bands, 2)
+
+#     # generate cloud mask
+#     cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue)
+
+#     # process no data values
+#     im_nodata = process_nodata_values(im_ms, cloud_mask)
+
+#     # if panchromatic sharpening is turned off
+#     if pan_off:
+#         # ms bands are untouched and the extra image is empty
+#         im_extra = []
+
+#     # otherwise perform panchromatic sharpening
+#     else:
+#         # read panchromatic band
+#         im_extra = read_panchromatic_band(fn_pan)
+
+#         # pansharpen Green, Blue, NIR for Landsat 7
+#         if satname == "L7":
+#             im_ms = pansharpen_L7(im_ms, im_extra, cloud_mask)
+
+#         # pansharpen Blue, Green, Red for Landsat 8 and 9
+#         elif satname in ["L8", "L9"]:
+#             im_ms = pansharpen_L8_L9(im_ms, im_extra, cloud_mask)
+
+#     return im_ms, georef, cloud_mask, im_extra, im_nodata
+
+
+# def preprocess_satellite_S2(fn, cloud_mask_issue, im_QA):
+#     """
+#     Reads the Sentinel-2 (S2) satellite images and preprocesses them.
+
+#     Arguments:
+#     -----------
+#     fn: list
+#         list of filenames, one filename for each band at different
+#         resolution (10m, 20m and 60m for Sentinel-2)
+#     cloud_mask_issue: boolean
+#         True if there is an issue with the cloud mask and sand pixels are being masked on the images
+#     im_QA: np.array
+#         2D array containing the QA band, from which the cloud_mask can be computed.
+
+#     Returns:
+#     -----------
+#     Tuple with the following elements:
+#     im_ms: np.array
+#         3D array containing the resampled bands (B,G,R,NIR,SWIR1,SWIR2)
+#     georef: np.array
+#         vector of 6 elements [Xtr, Xscale, Xshear, Ytr, Yshear, Yscale] defining the
+#         coordinates of the top-left pixel of the image
+#     cloud_mask: np.array
+#         2D cloud mask with True where cloud pixels are
+#     im_extra : np.array
+#         2D array containing the 10m resolution panchromatic band for Sentinel-2.
+#     im_nodata: np.array
+#         2D array with True where no data values (-inf) are located
+#     """
+
+#     # filepaths to .tif files
+#     fn_ms = fn[0]
+#     fn_pan = fn[1]
+#     fn_mask = fn[2]
+
+#     # read ms bands
+#     data = gdal.Open(fn_ms, gdal.GA_ReadOnly)
+#     georef = np.array(data.GetGeoTransform())
+#     bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
+#     im_ms = np.stack(bands, 2)
+
+#     # generate cloud mask
+#     cloud_mask = create_cloud_mask(im_QA, "S2", cloud_mask_issue)
+
+#     # process no data values
+#     im_nodata = process_nodata_values(im_ms, cloud_mask)
+
+#     # read 10m resolution panchromatic band
+#     im_extra = read_panchromatic_band(fn_pan)
+
+#     # resample multispectral bands to 10m resolution using bicubic interpolation
+#     im_ms = resample_multispectral_bands(im_ms, im_extra.shape[:2])
+
+#     return im_ms, georef, cloud_mask, im_extra, im_nodata
+
+
+def get_nodata_mask(im_ms: np.ndarray, shape: tuple) -> np.ndarray:
+    """
+    Generate a mask indicating no-data values in a multi-band image.
+
+    The function identifies pixels in each band of the input image that contain
+    values of -inf or NaN and returns a binary mask marking those pixels.
+
+    Parameters:
     -----------
-    fn: list
-        list of filenames, one filename for each band at different
-        resolution (30m and 15m for Landsat 7-8-9)
-    satname: str
-        name of the satellite mission ('L7', 'L8' or 'L9')
-    cloud_mask_issue: boolean
-        True if there is an issue with the cloud mask and sand pixels are being masked on the images
-    pan_off : boolean
-        if True, disable panchromatic sharpening and ignore pan band
-    im_QA: np.array
-        2D array containing the QA band, from which the cloud_mask can be computed.
+    im_ms : np.ndarray
+        A 3D numpy array representing the multi-band image where the last
+        dimension represents different bands.
+
+    shape : tuple
+        The shape of the output binary mask, typically the shape of
+        the spatial dimensions (height, width) of the input image.
 
     Returns:
-    -----------
-    Tuple with the following elements:
-    im_ms: np.array
-        3D array containing the pansharpened/down-sampled bands (B,G,R,NIR,SWIR1)
-    georef: np.array
-        vector of 6 elements [Xtr, Xscale, Xshear, Ytr, Yshear, Yscale] defining the
-        coordinates of the top-left pixel of the image
-    cloud_mask: np.array
-        2D cloud mask with True where cloud pixels are
-    im_extra : np.array
-        2D array containing the 15m resolution panchromatic band for Landsat 7, 8 and 9.
-    im_nodata: np.array
-        2D array with True where no data values (-inf) are located
+    --------
+    np.ndarray
+        A binary mask (of the provided shape) with the same spatial dimensions
+        as the input image. Pixels with no-data values in any band in the input
+        image are marked as True in the mask, and others are marked as False.
+
+    Notes:
+    ------
+    The function checks for -inf and NaN values across all bands for each pixel
+    and considers a pixel as no-data even if only one of its bands has a no-data value.
     """
+    # check if -inf or nan values on any band and eventually add those pixels to cloud mask
+    im_nodata = np.zeros(shape).astype(bool)
+    for k in range(im_ms.shape[2]):
+        im_inf = np.isin(im_ms[:, :, k], -np.inf)
+        im_nan = np.isnan(im_ms[:, :, k])
+        im_nodata = np.logical_or(np.logical_or(im_nodata, im_inf), im_nan)
+    return im_nodata
 
-    # filepaths to .tif files
-    fn_ms = fn[0]
-    fn_pan = fn[1]
-    fn_mask = fn[2]
-
-    # read ms bands
-    data = gdal.Open(fn_ms, gdal.GA_ReadOnly)
-    georef = np.array(data.GetGeoTransform())
-    bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
-    im_ms = np.stack(bands, 2)
-
-    # generate cloud mask
-    cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue)
-
-    # process no data values
-    im_nodata = process_nodata_values(im_ms, cloud_mask)
-
-    # if panchromatic sharpening is turned off
-    if pan_off:
-        # ms bands are untouched and the extra image is empty
-        im_extra = []
-
-    # otherwise perform panchromatic sharpening
-    else:
-        # read panchromatic band
-        im_extra = read_panchromatic_band(fn_pan)
-
-        # pansharpen Green, Blue, NIR for Landsat 7
-        if satname == "L7":
-            im_ms = pansharpen_L7(im_ms, im_extra, cloud_mask)
-
-        # pansharpen Blue, Green, Red for Landsat 8 and 9
-        elif satname in ["L8", "L9"]:
-            im_ms = pansharpen_L8_L9(im_ms, im_extra, cloud_mask)
-
-    return im_ms, georef, cloud_mask, im_extra, im_nodata
-
-
-def preprocess_satellite_S2(fn, cloud_mask_issue, im_QA):
-    """
-    Reads the Sentinel-2 (S2) satellite images and preprocesses them.
-
-    Arguments:
-    -----------
-    fn: list
-        list of filenames, one filename for each band at different
-        resolution (10m, 20m and 60m for Sentinel-2)
-    cloud_mask_issue: boolean
-        True if there is an issue with the cloud mask and sand pixels are being masked on the images
-    im_QA: np.array
-        2D array containing the QA band, from which the cloud_mask can be computed.
-
-    Returns:
-    -----------
-    Tuple with the following elements:
-    im_ms: np.array
-        3D array containing the resampled bands (B,G,R,NIR,SWIR1,SWIR2)
-    georef: np.array
-        vector of 6 elements [Xtr, Xscale, Xshear, Ytr, Yshear, Yscale] defining the
-        coordinates of the top-left pixel of the image
-    cloud_mask: np.array
-        2D cloud mask with True where cloud pixels are
-    im_extra : np.array
-        2D array containing the 10m resolution panchromatic band for Sentinel-2.
-    im_nodata: np.array
-        2D array with True where no data values (-inf) are located
-    """
-
-    # filepaths to .tif files
-    fn_ms = fn[0]
-    fn_pan = fn[1]
-    fn_mask = fn[2]
-
-    # read ms bands
-    data = gdal.Open(fn_ms, gdal.GA_ReadOnly)
-    georef = np.array(data.GetGeoTransform())
-    bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
-    im_ms = np.stack(bands, 2)
-
-    # generate cloud mask
-    cloud_mask = create_cloud_mask(im_QA, "S2", cloud_mask_issue)
-
-    # process no data values
-    im_nodata = process_nodata_values(im_ms, cloud_mask)
-
-    # read 10m resolution panchromatic band
-    im_extra = read_panchromatic_band(fn_pan)
-
-    # resample multispectral bands to 10m resolution using bicubic interpolation
-    im_ms = resample_multispectral_bands(im_ms, im_extra.shape[:2])
-
-    return im_ms, georef, cloud_mask, im_extra, im_nodata
-
+def get_zero_pixels(im_ms: np.ndarray, shape:tuple)-> np.ndarray:
+    im_zeros = np.ones(shape).astype(bool)
+    for k in [1, 3, 4]:  # loop through the Green, NIR and SWIR bands
+        im_zeros = np.logical_and(np.isin(im_ms[:, :, k], 0), im_zeros)
+    return im_zeros
 
 # Main function to preprocess a satellite image (L5, L7, L8, L9 or S2)
 def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
@@ -241,18 +284,11 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         ]
         im_QA = bands[0]
         cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
-
-        # check if -inf or nan values on any band and eventually add those pixels to cloud mask
-        im_nodata = np.zeros(cloud_mask.shape).astype(bool)
-        for k in range(im_ms.shape[2]):
-            im_inf = np.isin(im_ms[:, :, k], -np.inf)
-            im_nan = np.isnan(im_ms[:, :, k])
-            im_nodata = np.logical_or(np.logical_or(im_nodata, im_inf), im_nan)
+        # add pixels with -inf or nan values on any band to the nodata mask
+        im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
         # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
         # to the cloud mask as otherwise they will cause errors when calculating the NDWI and MNDWI
-        im_zeros = np.ones(cloud_mask.shape).astype(bool)
-        for k in [1, 3, 4]:  # loop through the Green, NIR and SWIR bands
-            im_zeros = np.logical_and(np.isin(im_ms[:, :, k], 0), im_zeros)
+        im_zeros = get_zero_pixels(im_ms, cloud_mask.shape)
         # add zeros to im nodata
         im_nodata = np.logical_or(im_zeros, im_nodata)
         # update cloud mask with all the nodata pixels
@@ -290,17 +326,11 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         ]
         im_QA = bands[0]
         cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
-        # check if -inf or nan values on any band and eventually add those pixels to cloud mask
-        im_nodata = np.zeros(cloud_mask.shape).astype(bool)
-        for k in range(im_ms.shape[2]):
-            im_inf = np.isin(im_ms[:, :, k], -np.inf)
-            im_nan = np.isnan(im_ms[:, :, k])
-            im_nodata = np.logical_or(np.logical_or(im_nodata, im_inf), im_nan)
+        # add pixels with -inf or nan values on any band to the nodata mask
+        im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
         # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
         # to the cloud mask as otherwise they will cause errors when calculating the NDWI and MNDWI
-        im_zeros = np.ones(cloud_mask.shape).astype(bool)
-        for k in [1, 3, 4]:  # loop through the Green, NIR and SWIR bands
-            im_zeros = np.logical_and(np.isin(im_ms[:, :, k], 0), im_zeros)
+        im_zeros = get_zero_pixels(im_ms, cloud_mask.shape)
         # add zeros to im nodata
         im_nodata = np.logical_or(im_zeros, im_nodata)
         # update cloud mask with all the nodata pixels
@@ -394,12 +424,7 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         ]
         im_QA = bands[0]
         cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
-        # check if -inf or nan values on any band and create nodata image
-        im_nodata = np.zeros(cloud_mask.shape).astype(bool)
-        for k in range(im_ms.shape[2]):
-            im_inf = np.isin(im_ms[:, :, k], -np.inf)
-            im_nan = np.isnan(im_ms[:, :, k])
-            im_nodata = np.logical_or(np.logical_or(im_nodata, im_inf), im_nan)
+        im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
         # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
         # to the cloud mask as otherwise they will cause errors when calculating the NDWI and MNDWI
         im_zeros = np.ones(im_nodata.shape).astype(bool)
