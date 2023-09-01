@@ -163,7 +163,35 @@ np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 #     return im_ms, georef, cloud_mask, im_extra, im_nodata
 
 
-def read_bands(filename: str):
+def read_bands(filename: str) -> list:
+    """
+    Read all the raster bands of a geospatial image file using GDAL.
+
+    This function opens the provided geospatial file using GDAL in read-only mode
+    and extracts each of the raster bands as a separate array. Each array represents
+    the values of the raster band across the entire spatial extent of the image.
+
+    Parameters:
+    -----------
+    filename : str
+        The path to the geospatial image file (e.g., a GeoTIFF) to be read.
+
+    Returns:
+    --------
+    list of np.ndarray
+        A list containing 2D numpy arrays. Each array in the list represents
+        one band from the geospatial image. The order of the arrays in the list
+        corresponds to the order of the bands in the original image.
+
+    Notes:
+    ------
+    This function relies on GDAL for reading geospatial data. Ensure that GDAL
+    is properly installed and available in the Python environment.
+
+    Example:
+    --------
+    bands = read_bands('path/to/image.tif')
+    """
     data = gdal.Open(filename, gdal.GA_ReadOnly)
     bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
     return bands
