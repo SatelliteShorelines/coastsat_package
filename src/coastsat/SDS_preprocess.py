@@ -337,13 +337,14 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         fn_ms = fn[0]
         fn_mask = fn[1]
         # read ms bands
-        bands = read_bands(fn_ms)
         data = gdal.Open(fn_ms, gdal.GA_ReadOnly)
         georef = np.array(data.GetGeoTransform())
+        bands = read_bands(fn_ms)
         im_ms = np.stack(bands, 2)
         # read cloud mask
         im_QA = read_bands(fn_mask)[0]
         cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
+
         # add pixels with -inf or nan values on any band to the nodata mask
         im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
         # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
@@ -356,10 +357,6 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
 
         # no extra image for Landsat 5 (they are all 30 m bands)
         im_extra = []
-        # read cloud mask
-        im_QA = read_bands(fn_mask)[0]
-        cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
-
     # =============================================================================================#
     # L7, L8 and L9 images
     # =============================================================================================#
