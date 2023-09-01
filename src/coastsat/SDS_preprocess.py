@@ -163,6 +163,12 @@ np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 #     return im_ms, georef, cloud_mask, im_extra, im_nodata
 
 
+def read_bands(filename: str):
+    data = gdal.Open(filename, gdal.GA_ReadOnly)
+    bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
+    return bands
+
+
 def get_nodata_mask(im_ms: np.ndarray, shape: tuple) -> np.ndarray:
     """
     Generate a mask indicating no-data values in a multi-band image.
@@ -200,11 +206,43 @@ def get_nodata_mask(im_ms: np.ndarray, shape: tuple) -> np.ndarray:
         im_nodata = np.logical_or(np.logical_or(im_nodata, im_inf), im_nan)
     return im_nodata
 
-def get_zero_pixels(im_ms: np.ndarray, shape:tuple)-> np.ndarray:
+
+def get_zero_pixels(im_ms: np.ndarray, shape: tuple) -> np.ndarray:
+    """
+    Generate a mask indicating pixels with zero values in specific bands of a multi-band image.
+
+    The function identifies pixels that have a value of 0 in the Green, NIR, and SWIR bands
+    of the input image and returns a binary mask marking those pixels.
+
+    Parameters:
+    -----------
+    im_ms : np.ndarray
+        A 3D numpy array representing the multi-band image where the last
+        dimension represents different bands.
+
+    shape : tuple
+        The shape of the output binary mask, typically the shape of
+        the spatial dimensions (height, width) of the input image.
+
+    Returns:
+    --------
+    np.ndarray
+        A binary mask (of the provided shape) with the same spatial dimensions
+        as the input image. Pixels with zero values in the Green, NIR, and SWIR bands
+        of the input image are marked as True in the mask, and others are marked as False.
+
+    Notes:
+    ------
+    The function specifically checks for zero values in the Green (band index 1),
+    NIR (band index 3), and SWIR (band index 4) bands of the input image. A pixel is
+    considered to be a zero pixel only if all of these three bands have a zero value for that pixel.
+    """
+    # Identify identify pixels with 0 intensity in the Green, NIR and SWIR bands
     im_zeros = np.ones(shape).astype(bool)
     for k in [1, 3, 4]:  # loop through the Green, NIR and SWIR bands
         im_zeros = np.logical_and(np.isin(im_ms[:, :, k], 0), im_zeros)
     return im_zeros
+
 
 # Main function to preprocess a satellite image (L5, L7, L8, L9 or S2)
 def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
@@ -271,18 +309,12 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         fn_ms = fn[0]
         fn_mask = fn[1]
         # read ms bands
+        bands = read_bands(fn_ms)
         data = gdal.Open(fn_ms, gdal.GA_ReadOnly)
         georef = np.array(data.GetGeoTransform())
-        bands = [
-            data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)
-        ]
         im_ms = np.stack(bands, 2)
         # read cloud mask
-        data = gdal.Open(fn_mask, gdal.GA_ReadOnly)
-        bands = [
-            data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)
-        ]
-        im_QA = bands[0]
+        im_QA = read_bands(fn_mask)[0]
         cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
         # add pixels with -inf or nan values on any band to the nodata mask
         im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
@@ -297,11 +329,7 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         # no extra image for Landsat 5 (they are all 30 m bands)
         im_extra = []
         # read cloud mask
-        data = gdal.Open(fn_mask, gdal.GA_ReadOnly)
-        bands = [
-            data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)
-        ]
-        im_QA = bands[0]
+        im_QA = read_bands(fn_mask)[0]
         cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
 
     # =============================================================================================#
@@ -315,16 +343,10 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         # read ms bands
         data = gdal.Open(fn_ms, gdal.GA_ReadOnly)
         georef = np.array(data.GetGeoTransform())
-        bands = [
-            data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)
-        ]
+        bands = read_bands(fn_ms)
         im_ms = np.stack(bands, 2)
-        # read cloud mask
-        data = gdal.Open(fn_mask, gdal.GA_ReadOnly)
-        bands = [
-            data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)
-        ]
-        im_QA = bands[0]
+        # read cloud mask and get the QA from the first band
+        im_QA = read_bands(fn_mask)[0]
         cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
         # add pixels with -inf or nan values on any band to the nodata mask
         im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
@@ -386,9 +408,7 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
         fn_ms = fn[0]
         data = gdal.Open(fn_ms, gdal.GA_ReadOnly)
         georef = np.array(data.GetGeoTransform())
-        bands = [
-            data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)
-        ]
+        bands = read_bands(fn_ms)
         im_ms = np.stack(bands, 2)
         im_ms = im_ms / 10000  # TOA scaled to 10000
 
@@ -403,14 +423,9 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
             cloud_mask = np.ones((nrows, ncols)).astype("bool")
             return im_ms, georef, cloud_mask, [], [], []
 
-        # read 20m band (SWIR1)
+        # read 20m band (SWIR1) from the first band
         fn_swir = fn[1]
-        data = gdal.Open(fn_swir, gdal.GA_ReadOnly)
-        bands = [
-            data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)
-        ]
-        im_swir = bands[0]
-        im_swir = im_swir / 10000  # TOA scaled to 10000
+        im_swir = read_bands(fn_swir)[0] / 10000  # TOA scaled to 10000
         im_swir = np.expand_dims(im_swir, axis=2)
 
         # append down-sampled SWIR1 band to the other 10m bands
@@ -418,19 +433,10 @@ def preprocess_single(fn, satname, cloud_mask_issue, pan_off, collection):
 
         # create cloud mask using 60m QA band (not as good as Landsat cloud cover)
         fn_mask = fn[2]
-        data = gdal.Open(fn_mask, gdal.GA_ReadOnly)
-        bands = [
-            data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)
-        ]
-        im_QA = bands[0]
+        im_QA = read_bands(fn_mask)[0]
         cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
         im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
-        # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
-        # to the cloud mask as otherwise they will cause errors when calculating the NDWI and MNDWI
-        im_zeros = np.ones(im_nodata.shape).astype(bool)
-        im_zeros = np.logical_and(np.isin(im_ms[:, :, 1], 0), im_zeros)  # Green
-        im_zeros = np.logical_and(np.isin(im_ms[:, :, 3], 0), im_zeros)  # NIR
-        im_zeros = np.logical_and(np.isin(im_ms[:, :, 4], 0), im_zeros)  # SWIR
+        im_zeros = get_zero_pixels(im_ms, im_nodata.shape)
         # add to im_nodata
         im_nodata = np.logical_or(im_zeros, im_nodata)
         # dilate if image was merged as there could be issues at the edges
