@@ -345,19 +345,21 @@ def preprocess_single(
         im_ms = np.stack(bands, 2)
         # read cloud mask
         im_QA = read_bands(fn_mask)[0]
-        cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
         if not do_cloud_mask:
-            cloud_mask[:] = False
-            cloud_mask = get_nodata_mask(im_ms, cloud_mask.shape)
+            print(f"NO cloud mask")
+            cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
+            # cloud mask is the no data mask
+            cloud_mask = im_nodata.copy()
             # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
             # to the cloud mask as otherwise they will cause errors when calculating the NDWI and MNDWI
             im_zeros = get_zero_pixels(im_ms, cloud_mask.shape)
             # add zeros to im nodata
             im_nodata = np.logical_or(im_zeros, im_nodata)
         else:
-            cloud_mask = get_nodata_mask(im_ms, cloud_mask.shape)
+            print(f"Applying cloud mask")
+            cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
             # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
@@ -368,16 +370,6 @@ def preprocess_single(
 
             # update cloud mask with all the nodata pixels
             cloud_mask = np.logical_or(cloud_mask, im_nodata)
-
-        # # add pixels with -inf or nan values on any band to the nodata mask
-        # im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
-        # # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
-        # # to the cloud mask as otherwise they will cause errors when calculating the NDWI and MNDWI
-        # im_zeros = get_zero_pixels(im_ms, cloud_mask.shape)
-        # # add zeros to im nodata
-        # im_nodata = np.logical_or(im_zeros, im_nodata)
-        # # update cloud mask with all the nodata pixels
-        # cloud_mask = np.logical_or(cloud_mask, im_nodata)
 
         # no extra image for Landsat 5 (they are all 30 m bands)
         im_extra = []
