@@ -75,7 +75,10 @@ def test_imports():
 
 
 # Main function for batch shoreline detection
-def extract_shorelines(metadata, settings):
+def extract_shorelines(
+    metadata,
+    settings,
+):
     """
     Main function to extract shorelines from satellite images
 
@@ -209,7 +212,7 @@ def extract_shorelines(metadata, settings):
             range(len(filenames)), desc="Mapping Shorelines", leave=True, position=0
         ):
             # print('\r%s:   %d%%' % (satname,int(((i+1)/len(filenames))*100)), end='')
-
+            apply_cloud_mask = settings.get("apply_cloud_mask", True)
             # get image filename
             fn = SDS_tools.get_filenames(filenames[i], filepath, satname)
             # preprocess image (cloud mask + pansharpening/downsampling)
@@ -226,6 +229,7 @@ def extract_shorelines(metadata, settings):
                 settings["cloud_mask_issue"],
                 settings["pan_off"],
                 collection,
+                apply_cloud_mask,
             )
             # get image spatial reference system (epsg code) from metadata dict
             image_epsg = metadata[satname]["epsg"][i]
