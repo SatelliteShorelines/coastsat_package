@@ -350,7 +350,7 @@ def preprocess_single(
             cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
-            # cloud mask is the no data mask
+            # cloud mask is the same as the no data mask
             cloud_mask = im_nodata.copy()
             # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
             # to the cloud mask as otherwise they will cause errors when calculating the NDWI and MNDWI
@@ -951,12 +951,14 @@ def save_jpg(metadata, settings, **kwargs):
             # image filename
             fn = SDS_tools.get_filenames(filenames[i], filepath, satname)
             # read and preprocess image
+            apply_cloud_mask = settings.get("apply_cloud_mask", True)
             im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = preprocess_single(
                 fn,
                 satname,
                 settings["cloud_mask_issue"],
                 settings["pan_off"],
                 collection,
+                apply_cloud_mask,
             )
 
             # compute cloud_cover percentage (with no data pixels)
@@ -1071,9 +1073,15 @@ def get_reference_sl(metadata, settings):
     # loop trhough the images
     for i in range(len(filenames)):
         # read image
+        apply_cloud_mask = settings.get("apply_cloud_mask", True)
         fn = SDS_tools.get_filenames(filenames[i], filepath, satname)
         im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = preprocess_single(
-            fn, satname, settings["cloud_mask_issue"], settings["pan_off"], collection
+            fn,
+            satname,
+            settings["cloud_mask_issue"],
+            settings["pan_off"],
+            collection,
+            apply_cloud_mask,
         )
 
         # compute cloud_cover percentage (with no data pixels)
