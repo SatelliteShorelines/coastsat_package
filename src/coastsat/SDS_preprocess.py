@@ -346,7 +346,6 @@ def preprocess_single(
         # read cloud mask
         im_QA = read_bands(fn_mask)[0]
         if not do_cloud_mask:
-            print(f"NO cloud mask")
             cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
@@ -358,7 +357,6 @@ def preprocess_single(
             # add zeros to im nodata
             im_nodata = np.logical_or(im_zeros, im_nodata)
         else:
-            print(f"Applying cloud mask")
             cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
@@ -389,7 +387,6 @@ def preprocess_single(
         im_QA = read_bands(fn_mask)[0]
 
         if not do_cloud_mask:
-            print(f"NO cloud mask")
             cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
@@ -401,7 +398,6 @@ def preprocess_single(
             # add zeros to im nodata
             im_nodata = np.logical_or(im_zeros, im_nodata)
         else:
-            print(f"Applying cloud mask")
             cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
@@ -490,7 +486,6 @@ def preprocess_single(
         fn_mask = fn[2]
         im_QA = read_bands(fn_mask)[0]
         if not do_cloud_mask:
-            print(f"NO cloud mask")
             cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
@@ -505,7 +500,6 @@ def preprocess_single(
                 im_nodata = morphology.dilation(im_nodata, morphology.square(5))
 
         else:
-            print(f"Applying cloud mask")
             cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
@@ -792,21 +786,6 @@ def create_jpg(
         Saves a .jpg image corresponding to the preprocessed satellite image
 
     """
-    # if "apply_cloud_mask" in kwargs:
-    #     print(kwargs["apply_cloud_mask"])
-
-    # apply_cloud_mask = (
-    #     kwargs["apply_cloud_mask"] if "apply_cloud_mask" in kwargs else True
-    # )
-    # print(f"'im_nodata' in kwargs: {'im_nodata' in kwargs}")
-    # print(f"not apply_cloud_mask: {not apply_cloud_mask}")
-    # if not apply_cloud_mask and "im_nodata" in kwargs:
-    #     print(f"Applying no data mask instead of cloud mask")
-    #     mask = kwargs["im_nodata"]
-    # else:
-    #     print(f"CLoud mask being applied")
-    #     mask = cloud_mask
-
     # rescale image intensity for display purposes
     im_RGB = rescale_image_intensity(im_ms[:, :, [2, 1, 0]], cloud_mask, 99.9)
     im_NIR = rescale_image_intensity(im_ms[:, :, 3], cloud_mask, 99.9)
