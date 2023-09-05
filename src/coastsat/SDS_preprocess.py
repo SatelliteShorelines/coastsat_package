@@ -396,19 +396,26 @@ def preprocess_single(
         im_ms = np.stack(bands, 2)
         # read cloud mask and get the QA from the first band
         im_QA = read_bands(fn_mask)[0]
-        cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
+
         if not do_cloud_mask:
-            cloud_mask[:] = False
-            cloud_mask = get_nodata_mask(im_ms, cloud_mask.shape)
+            print(f"NO cloud mask")
+            cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
+            # cloud_mask[:] = False
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
+            # cloud mask is the no data mask
+            cloud_mask = im_nodata.copy()
+            # cloud_mask = get_nodata_mask(im_ms, cloud_mask.shape)
+
             # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
             # to the cloud mask as otherwise they will cause errors when calculating the NDWI and MNDWI
             im_zeros = get_zero_pixels(im_ms, cloud_mask.shape)
             # add zeros to im nodata
             im_nodata = np.logical_or(im_zeros, im_nodata)
         else:
-            cloud_mask = get_nodata_mask(im_ms, cloud_mask.shape)
+            print(f"Applying cloud mask")
+            # cloud_mask = get_nodata_mask(im_ms, cloud_mask.shape)
+            cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
             # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
@@ -416,6 +423,7 @@ def preprocess_single(
             im_zeros = get_zero_pixels(im_ms, cloud_mask.shape)
             # add zeros to im nodata
             im_nodata = np.logical_or(im_zeros, im_nodata)
+            cloud_mask = np.logical_or(cloud_mask, im_nodata)
 
         # # add pixels with -inf or nan values on any band to the nodata mask
         # im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
@@ -888,7 +896,10 @@ def save_single_jpg(
     NIR saved under data/preprocessed/NIR
     SWIR saved under data/preprocessed/SWIR
     """
-
+    if "apply_cloud_mask" in kwargs:
+        do_cloud_mask = kwargs["apply_cloud_mask"]
+    else:
+        do_cloud_mask = True
     # create subfolder to store the jpg files
     jpg_directory = os.path.join(filepath_data, sitename, "jpg_files", "preprocessed")
     os.makedirs(jpg_directory, exist_ok=True)
@@ -896,7 +907,7 @@ def save_single_jpg(
     fn = SDS_tools.get_filenames(filename, tif_paths, satname)
     # preprocess the image and perform pansharpening
     im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = preprocess_single(
-        fn, satname, cloud_mask_issue, False, collection
+        fn, satname, cloud_mask_issue, False, collection, do_cloud_mask
     )
     # compute cloud_cover percentage (with no data pixels)
     cloud_cover_combined = np.divide(
