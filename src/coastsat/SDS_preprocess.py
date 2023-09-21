@@ -8,10 +8,13 @@ Author: Kilian Vos, Water Research Laboratory, University of New South Wales
 
 # load modules
 import os
+import json
 import numpy as np
 import matplotlib.pyplot as plt
 import pdb
 import pandas as pd
+from datetime import date, datetime
+from json import JSONEncoder
 
 # image processing modules
 import skimage.transform as transform
@@ -33,6 +36,44 @@ import re
 from coastsat import SDS_tools
 
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
+
+
+def write_to_json(filepath: str, settings: dict):
+    """ "Write the  settings dictionary to json file"""
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    to_file(settings, filepath)
+
+
+def to_file(data: dict, filepath: str) -> None:
+    """
+    Serializes a dictionary to a JSON file, handling special serialization for datetime and numpy ndarray objects.
+
+    The function handles two special cases:
+    1. If the data contains datetime.date or datetime.datetime objects, they are serialized to their ISO format.
+    2. If the data contains numpy ndarray objects, they are converted to lists before serialization.
+
+    Parameters:
+    - data (dict): Dictionary containing the data to be serialized to a JSON file.
+    - filepath (str): Path (including filename) where the JSON file should be saved.
+
+    Returns:
+    - None
+
+    Note:
+    - This function requires the json, datetime, and numpy modules to be imported.
+    """
+
+    class DateTimeEncoder(JSONEncoder):
+        # Override the default method
+        def default(self, obj):
+            if isinstance(obj, (date, datetime)):
+                return obj.isoformat()
+            if isinstance(obj, (np.ndarray)):
+                new_obj = [array.tolist() for array in obj]
+                return new_obj
+
+    with open(filepath, "w") as fp:
+        json.dump(data, fp, cls=DateTimeEncoder)
 
 
 # def preprocess_satellite_L7_L8_L9(fn, satname, cloud_mask_issue, pan_off, im_QA):
@@ -1258,10 +1299,13 @@ def get_reference_sl(metadata, settings):
             )
             # save the reference shoreline as .pkl
             filepath = os.path.join(filepath_data, sitename)
+            # save_path = os.path.join(filepath, sitename + "_reference_shoreline.json")
+            # write_to_json(save_path, pts_coords)
             with open(
                 os.path.join(filepath, sitename + "_reference_shoreline.pkl"), "wb"
             ) as f:
                 pickle.dump(pts_coords, f)
+
             # also store as .geojson in case user wants to drag-and-drop on GIS for verification
             # for k,line in enumerate(geoms):
             #     gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(line))
