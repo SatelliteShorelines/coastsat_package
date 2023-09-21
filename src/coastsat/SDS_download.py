@@ -664,12 +664,9 @@ def retrieve_images(
 
     # once all images have been downloaded, load metadata from .txt files
     metadata = get_metadata(inputs)
-
     # save metadata dict
-    with open(
-        os.path.join(im_folder, inputs["sitename"] + "_metadata" + ".pkl"), "wb"
-    ) as f:
-        pickle.dump(metadata, f)
+    metadata_json = os.path.join(im_folder, inputs["sitename"] + "_metadata" + ".json")
+    SDS_preprocess.write_to_json(metadata_json, metadata)
     print("Satellite images downloaded from GEE and save in %s" % im_folder)
     return metadata
 
@@ -741,11 +738,13 @@ def get_metadata(inputs):
                 metadata[satname]["epsg"].append(epsg)
                 metadata[satname]["dates"].append(date)
 
-    # save a .pkl file containing the metadata dict
-    with open(
-        os.path.join(filepath, inputs["sitename"] + "_metadata" + ".pkl"), "wb"
-    ) as f:
-        pickle.dump(metadata, f)
+    # save a json file containing the metadata dict
+    metadata_json = os.path.join(filepath, inputs["sitename"] + "_metadata" + ".json")
+    SDS_preprocess.write_to_json(metadata_json, metadata)
+    # with open(
+    #     os.path.join(filepath, inputs["sitename"] + "_metadata" + ".pkl"), "wb"
+    # ) as f:
+    #     pickle.dump(metadata, f)
 
     return metadata
 
