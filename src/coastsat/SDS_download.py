@@ -671,12 +671,35 @@ def retrieve_images(
     return metadata
 
 
+def parse_date_from_filename(filename: str) -> datetime:
+    date_str = filename[0:19]
+    return pytz.utc.localize(
+        datetime(
+            int(date_str[:4]),
+            int(date_str[5:7]),
+            int(date_str[8:10]),
+            int(date_str[11:13]),
+            int(date_str[14:16]),
+            int(date_str[17:19]),
+        )
+    )
+
+
+def read_metadata_file(filepath: str) -> Dict[str, object]:
+    with open(filepath, "r") as f:
+        filename = f.readline().split("\t")[1].strip()
+        acc_georef = float(f.readline().split("\t")[1].strip())
+        epsg = int(f.readline().split("\t")[1].strip())
+    return {"filename": filename, "acc_georef": acc_georef, "epsg": epsg}
+
+
 def get_metadata(inputs):
     """
     Gets the metadata from the downloaded images by parsing .txt files located
     in the \meta subfolder.
 
     KV WRL 2018
+    modified by Sharon Fitzpatrick 2023
 
     Arguments:
     -----------
@@ -693,12 +716,16 @@ def get_metadata(inputs):
         date, filename, georeferencing accuracy and image coordinate reference system
 
     """
+    print(f"Getting metadata")
     # directory containing the images
     filepath = os.path.join(inputs["filepath"], inputs["sitename"])
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"The directory {filepath} does not exist.")
     # initialize metadata dict
     metadata = dict([])
     # loop through the satellite missions
     for satname in ["L5", "L7", "L8", "L9", "S2"]:
+        sat_path = os.path.join(filepath, satname)
         # if a folder has been created for the given satellite mission
         if satname in os.listdir(filepath):
             # update the metadata dict
@@ -709,42 +736,25 @@ def get_metadata(inputs):
                 "dates": [],
             }
             # directory where the metadata .txt files are stored
-            filepath_meta = os.path.join(filepath, satname, "meta")
+            filepath_meta = os.path.join(sat_path, "meta")
             # get the list of filenames and sort it chronologically
-            filenames_meta = os.listdir(filepath_meta)
-            filenames_meta.sort()
+            if not os.path.exists(filepath_meta):
+                continue
+            filenames_meta = sorted(os.listdir(filepath_meta))
             # loop through the .txt files
             for im_meta in filenames_meta:
-                # read them and extract the metadata info: filename, georeferencing accuracy
-                # epsg code and date
-                with open(os.path.join(filepath_meta, im_meta), "r") as f:
-                    filename = f.readline().split("\t")[1].replace("\n", "")
-                    acc_georef = float(f.readline().split("\t")[1].replace("\n", ""))
-                    epsg = int(f.readline().split("\t")[1].replace("\n", ""))
-                date_str = filename[0:19]
-                date = pytz.utc.localize(
-                    datetime(
-                        int(date_str[:4]),
-                        int(date_str[5:7]),
-                        int(date_str[8:10]),
-                        int(date_str[11:13]),
-                        int(date_str[14:16]),
-                        int(date_str[17:19]),
-                    )
+                meta_filepath = os.path.join(filepath_meta, im_meta)
+                meta_info = read_metadata_file(meta_filepath)
+                metadata[satname]["filenames"].append(meta_info["filename"])
+                metadata[satname]["acc_georef"].append(meta_info["acc_georef"])
+                metadata[satname]["epsg"].append(meta_info["epsg"])
+                metadata[satname]["dates"].append(
+                    parse_date_from_filename(meta_info["filename"])
                 )
-                # store the information in the metadata dict
-                metadata[satname]["filenames"].append(filename)
-                metadata[satname]["acc_georef"].append(acc_georef)
-                metadata[satname]["epsg"].append(epsg)
-                metadata[satname]["dates"].append(date)
 
     # save a json file containing the metadata dict
     metadata_json = os.path.join(filepath, inputs["sitename"] + "_metadata" + ".json")
     SDS_preprocess.write_to_json(metadata_json, metadata)
-    # with open(
-    #     os.path.join(filepath, inputs["sitename"] + "_metadata" + ".pkl"), "wb"
-    # ) as f:
-    #     pickle.dump(metadata, f)
 
     return metadata
 
