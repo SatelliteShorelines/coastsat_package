@@ -49,29 +49,29 @@ from coastsat.classification import training_sites
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
 
-# @todo remove this after testing imports
-def test_imports():
-    print(
-        list(
-            os.path.abspath(resource)
-            for resource in importlib.resources.files(models).iterdir()
-            if resource.is_file()
-        )
-    )
-    print(
-        list(
-            os.path.abspath(resource)
-            for resource in importlib.resources.files(training_data).iterdir()
-            if resource.is_file()
-        )
-    )
-    print(
-        list(
-            os.path.abspath(resource)
-            for resource in importlib.resources.files(training_sites).iterdir()
-            if resource.is_file()
-        )
-    )
+# # @todo remove this after testing imports
+# def test_imports():
+#     print(
+#         list(
+#             os.path.abspath(resource)
+#             for resource in importlib.resources.files(models).iterdir()
+#             if resource.is_file()
+#         )
+#     )
+#     print(
+#         list(
+#             os.path.abspath(resource)
+#             for resource in importlib.resources.files(training_data).iterdir()
+#             if resource.is_file()
+#         )
+#     )
+#     print(
+#         list(
+#             os.path.abspath(resource)
+#             for resource in importlib.resources.files(training_sites).iterdir()
+#             if resource.is_file()
+#         )
+#     )
 
 
 # Main function for batch shoreline detection
@@ -369,8 +369,8 @@ def extract_shorelines(
 
     # save outputput structure as output.pkl
     filepath = os.path.join(filepath_data, sitename)
-    with open(os.path.join(filepath, sitename + "_output.pkl"), "wb") as f:
-        pickle.dump(output, f)
+    json_path = os.path.join(filepath, sitename + "_output.json")
+    SDS_preprocess.write_to_json(json_path, output)
 
     return output
 
