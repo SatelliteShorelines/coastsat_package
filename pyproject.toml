@@ -12,7 +12,7 @@ where = ["src"]
 [project]
 name = "coastsat_package"
 dynamic = ["readme"]
-version = "0.1.17"
+version = "0.1.18"
 authors = [
   { name="Kilian Vos & Sharon Fitzpatrick" },
 ]
