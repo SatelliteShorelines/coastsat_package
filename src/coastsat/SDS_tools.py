@@ -835,7 +835,7 @@ def create_gdf(
     shoreline: List[List[float]],
     date: datetime,
     satname: str,
-    geoaccuracy: float,
+    geoaccuracy: Union[float, str],
     cloud_cover: float,
     idx: int,
     geomtype: str,
@@ -851,8 +851,8 @@ def create_gdf(
         Date associated with the shoreline.
     satname: str
         Satellite name.
-    geoaccuracy: float
-        Geo accuracy value.
+    geoaccuracy: float or string
+        Geo accuracy value, can be float for landsat or PASSED/FAILED for S2
     cloud_cover: float
         Cloud cover value.
     idx: int
@@ -917,7 +917,7 @@ def output_to_gdf(
     # we use filter(None,shoreline_gdf) to not include any empty shorelines which is indicated by create_gdf returning None
     gdf_list = list(
         filter(
-            None,
+            lambda gdf: not gdf.empty if gdf is not None else False,
             map(
                 lambda idx: create_gdf(
                     output["shorelines"][idx],
