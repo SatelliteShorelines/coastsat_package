@@ -82,13 +82,29 @@ def get_image_quality(satname: str, im_meta: dict) -> str:
         L8, L9: Landsat 8 and Landsat 9
         S2: Sentinel-2
     """
-    if satname in ["L5", "L7"]:
-        im_quality = im_meta["properties"].get("IMAGE_QUALITY", "NA")
-    elif satname in ["L8", "L9"]:
-        im_quality = im_meta["properties"].get("IMAGE_QUALITY_OLI", "NA")
-    elif satname in ["S2"]:  # ['PASSED' or 'FAILED']
-        im_quality = im_meta["properties"].get("RADIOMETRIC_QUALITY", "NA")
-    return im_quality
+    # Mapping of satellite names to their respective quality keys
+    quality_keys = {
+        "L5": "IMAGE_QUALITY",
+        "L7": "IMAGE_QUALITY",
+        "L8": "IMAGE_QUALITY_OLI",
+        "L9": "IMAGE_QUALITY_OLI",
+    }
+    if satname in quality_keys:
+        return im_meta["properties"].get(quality_keys[satname], "NA")
+    elif satname == "S2":
+        # List of possible quality flag names for Sentinel-2
+        flag_names = ["RADIOMETRIC_QUALITY", "RADIOMETRIC_QUALITY_FLAG"]
+        # Try to find the first existing quality flag in the metadata properties
+        for flag in flag_names:
+            if flag in im_meta["properties"]:
+                return im_meta["properties"][flag]
+        # If no quality flag is found, log a warning and default to "PASSED"
+        print(
+            "WARNING: could not find Sentinel-2 geometric quality flag,"
+            + " raise an issue at https://github.com/kvos/CoastSat/issues"
+            + " and add your inputs in text (not a screenshot, please)."
+        )
+        return "PASSED"
 
 
 def get_georeference_accuracy(satname: str, im_meta: dict) -> str:
@@ -111,6 +127,7 @@ def get_georeference_accuracy(satname: str, im_meta: dict) -> str:
     str: The accuracy of the geometric reference.
     """
     if satname in ["L5", "L7", "L8", "L9"]:
+        # average georefencing error across Landsat collection (RMSE = 12m)
         acc_georef = im_meta["properties"].get("GEOMETRIC_RMSE_MODEL", 12)
     elif satname == "S2":
         flag_names = [
@@ -119,12 +136,12 @@ def get_georeference_accuracy(satname: str, im_meta: dict) -> str:
             "quality_check",
             "GENERAL_QUALITY_FLAG",
         ]
-        key = next(
-            (key for key in flag_names if key in im_meta["properties"].keys()), None
-        )
-        if key is None:
-            acc_georef = -1
-        acc_georef = 1 if im_meta["properties"][key] == "PASSED" else -1
+        for flag in flag_names:
+            if flag in im_meta["properties"]:
+                return im_meta["properties"][flag]
+        # if none fo the flags appeared then set the acc_georef to passed
+        acc_georef = "PASSED"
+        # acc_georef = -1 # old value returned before update
     return acc_georef
 
 
@@ -165,6 +182,11 @@ def handle_duplicate_image_names(
     return im_fn
 
 
+def filter_bands(bands_source, band_ids):
+    """Filters the bands from bands_source based on the given band_ids."""
+    return [band for band in bands_source if band["id"] in band_ids]
+
+
 def retrieve_images(
     inputs,
     cloud_threshold: float = 99.9,
@@ -173,7 +195,7 @@ def retrieve_images(
     apply_cloud_mask: bool = True,
 ):
     """
-    Downloads all images from Landsat 5, Landsat 7, Landsat 8 and Sentinel-2
+    Downloads all images from Landsat 5, Landsat 7, Landsat 8, Landsat 9 and Sentinel-2
     covering the area of interest and acquired between the specified dates.
     The downloaded images are in .TIF format and organised in subfolders, divided
     by satellite mission. The bands are also subdivided by pixel resolution.
@@ -234,6 +256,8 @@ def retrieve_images(
     # remove UTM duplicates in S2 collections (they provide several projections for same images)
     if "S2" in inputs["sat_list"] and len(im_dict_T1["S2"]) > 0:
         im_dict_T1["S2"] = filter_S2_collection(im_dict_T1["S2"])
+        # get s2cloudless collection
+        im_dict_s2cloudless = get_s2cloudless(im_dict_T1["S2"], inputs)
 
     # create a new directory for this site with the name of the site
     im_folder = os.path.join(inputs["filepath"], inputs["sitename"])
@@ -242,20 +266,21 @@ def retrieve_images(
 
     # bands for each mission
     if inputs["landsat_collection"] == "C01":
-        qa_band = "BQA"
+        qa_band_Landsat = "BQA"
     elif inputs["landsat_collection"] == "C02":
-        qa_band = "QA_PIXEL"
+        qa_band_Landsat = "QA_PIXEL"
     else:
         raise Exception(
             "Landsat collection %s does not exist, " % inputs["landsat_collection"]
             + "choose C01 or C02."
         )
+    qa_band_S2 = "QA60"
     bands_dict = {
-        "L5": ["B1", "B2", "B3", "B4", "B5", qa_band],
-        "L7": ["B1", "B2", "B3", "B4", "B5", qa_band],
-        "L8": ["B2", "B3", "B4", "B5", "B6", qa_band],
-        "L9": ["B2", "B3", "B4", "B5", "B6", qa_band],
-        "S2": ["B2", "B3", "B4", "B8", "B11", "QA60"],
+        "L5": ["B1", "B2", "B3", "B4", "B5", qa_band_Landsat],
+        "L7": ["B1", "B2", "B3", "B4", "B5", qa_band_Landsat],
+        "L8": ["B2", "B3", "B4", "B5", "B6", qa_band_Landsat],
+        "L9": ["B2", "B3", "B4", "B5", "B6", qa_band_Landsat],
+        "S2": ["B2", "B3", "B4", "B8", "s2cloudless", "B11", qa_band_S2],
     }
 
     # main loop to download the images for each satellite mission
@@ -270,11 +295,8 @@ def retrieve_images(
         # create subfolder structure to store the different bands
         filepaths = SDS_tools.create_folder_structure(im_folder, satname)
         # initialise variables and loop through images
-        georef_accs = []
-        all_names = []
-        im_epsg = []
-        im_quality = []
         bands_id = bands_dict[satname]
+        all_names = []  # list for detecting duplicates
 
         # loop through each image
         for i in tqdm(
@@ -294,24 +316,34 @@ def retrieve_images(
                 im_date = im_timestamp.strftime("%Y-%m-%d-%H-%M-%S")
 
                 # get epsg code
-                im_epsg.append(int(im_meta["bands"][0]["crs"][5:]))
+                im_epsg = int(im_meta["bands"][0]["crs"][5:])
 
-                # get geometric accuracy and image quality
+                # get quality flags (geometric and radiometric quality)
                 accuracy_georef = get_georeference_accuracy(satname, im_meta)
                 image_quality = get_image_quality(satname, im_meta)
-                im_quality.append(image_quality)
-                georef_accs.append(accuracy_georef)
+
+                # select image by id
+                image_ee = ee.Image(im_meta["id"])
+
+                # for S2 add s2cloudless probability band
+                if satname == "S2":
+                    if len(im_dict_s2cloudless[i]) == 0:
+                        raise Exception(
+                            "could not find matching s2cloudless image, raise issue on Github at"
+                            + "https://github.com/kvos/CoastSat/issues and provide your inputs."
+                        )
+                    im_cloud = ee.Image(im_dict_s2cloudless[i]["id"])
+                    cloud_prob = im_cloud.select("probability").rename("s2cloudless")
+                    image_ee = image_ee.addBands(cloud_prob)
 
                 # download the images as .tif files
                 bands = dict([])
                 im_fn = dict([])
                 # first delete dimensions key from dictionnary
                 # otherwise the entire image is extracted (don't know why)
-                im_bands = im_meta["bands"]
+                im_bands = image_ee.getInfo()["bands"]
                 for j in range(len(im_bands)):
                     del im_bands[j]["dimensions"]
-                # get image id
-                image_ee = ee.Image(im_meta["id"])
 
                 # =============================================================================================#
                 # Landsat 5 download
@@ -355,6 +387,7 @@ def retrieve_images(
                         suffix,
                     )
                     im_fn["mask"] = im_fn["ms"].replace("_ms", "_mask")
+                    filename_ms = im_fn["ms"]
                     all_names.append(im_fn["ms"])
 
                     # resample ms bands to 15m with bilinear interpolation
@@ -384,16 +417,6 @@ def retrieve_images(
                     # delete original downloads
                     for _ in [fn_ms, fn_QA]:
                         os.remove(_)
-
-                    # add metadata in .txt file (save at the end of the loop)
-                    filename_txt = im_fn["ms"].replace("_ms", "").replace(".tif", "")
-                    metadict = {
-                        "filename": im_fn["ms"],
-                        "acc_georef": georef_accs[i],
-                        "epsg": im_epsg[i],
-                        "image_quality": im_quality[i],
-                    }
-
                     if save_jpg:
                         tif_paths = SDS_tools.get_filepath(inputs, satname)
                         SDS_preprocess.save_single_jpg(
@@ -407,12 +430,6 @@ def retrieve_images(
                             collection=inputs["landsat_collection"],
                             apply_cloud_mask=apply_cloud_mask,
                         )
-                    # write metadata
-                    with open(
-                        os.path.join(filepaths[0], filename_txt + ".txt"), "w"
-                    ) as f:
-                        for key in metadict.keys():
-                            f.write("%s\t%s\n" % (key, metadict[key]))
 
                 # =============================================================================================#
                 # Landsat 7, 8 and 9 download
@@ -475,6 +492,7 @@ def retrieve_images(
                         suffix,
                     )
                     im_fn["mask"] = im_fn["ms"].replace("_ms", "_mask")
+                    filename_ms = im_fn["ms"]
                     all_names.append(im_fn["ms"])
 
                     # resample the ms bands to the pan band with bilinear interpolation (for pan-sharpening later)
@@ -511,15 +529,6 @@ def retrieve_images(
                     for _ in [fn_ms, fn_QA]:
                         os.remove(_)
 
-                    # metadata for .txt file
-                    filename_txt = im_fn["ms"].replace("_ms", "").replace(".tif", "")
-                    metadict = {
-                        "filename": im_fn["ms"],
-                        "acc_georef": georef_accs[i],
-                        "epsg": im_epsg[i],
-                        "image_quality": im_quality[i],
-                    }
-
                     if save_jpg:
                         tif_paths = SDS_tools.get_filepath(inputs, satname)
                         SDS_preprocess.save_single_jpg(
@@ -540,22 +549,28 @@ def retrieve_images(
                     fp_ms = filepaths[1]
                     fp_swir = filepaths[2]
                     fp_mask = filepaths[3]
-                    # select bands (10m ms RGB+NIR, 20m SWIR1, 60m QA band)
-                    bands["ms"] = [
-                        im_bands[_]
-                        for _ in range(len(im_bands))
-                        if im_bands[_]["id"] in bands_id[:4]
-                    ]
-                    bands["swir"] = [
-                        im_bands[_]
-                        for _ in range(len(im_bands))
-                        if im_bands[_]["id"] in bands_id[4:5]
-                    ]
-                    bands["mask"] = [
-                        im_bands[_]
-                        for _ in range(len(im_bands))
-                        if im_bands[_]["id"] in bands_id[-1:]
-                    ]
+                    # select bands (10m ms RGB+NIR+s2cloudless, 20m SWIR1, 60m QA band)
+                    # Assuming bands_id is a predefined list, and im_bands is a predefined source list
+                    bands = {
+                        "ms": filter_bands(im_bands, bands_id[:5]),
+                        "swir": filter_bands(im_bands, bands_id[5:6]),
+                        "mask": filter_bands(im_bands, bands_id[-1:]),
+                    }
+                    # bands["ms"] = [
+                    #     im_bands[_]
+                    #     for _ in range(len(im_bands))
+                    #     if im_bands[_]["id"] in bands_id[:5]
+                    # ]
+                    # bands["swir"] = [
+                    #     im_bands[_]
+                    #     for _ in range(len(im_bands))
+                    #     if im_bands[_]["id"] in bands_id[5:6]
+                    # ]
+                    # bands["mask"] = [
+                    #     im_bands[_]
+                    #     for _ in range(len(im_bands))
+                    #     if im_bands[_]["id"] in bands_id[-1:]
+                    # ]
                     # adjust polygon for both ms and pan bands
                     proj_ms = image_ee.select("B1").projection()
                     proj_swir = image_ee.select("B11").projection()
@@ -595,7 +610,9 @@ def retrieve_images(
                         inputs["sitename"],
                         suffix,
                     )
+                    filename_ms = im_fn["ms"]
                     all_names.append(im_fn["ms"])
+
                     # resample the 20m swir band to the 10m ms band with bilinear interpolation
                     fn_in = fn_swir
                     fn_target = fn_ms
@@ -624,16 +641,9 @@ def retrieve_images(
                     for _ in [fn_swir, fn_QA]:
                         os.remove(_)
                     # rename the multispectral band file
-                    os.rename(fn_ms, os.path.join(fp_ms, im_fn["ms"]))
-
-                    # metadata for .txt file
-                    filename_txt = im_fn["ms"].replace("_ms", "").replace(".tif", "")
-                    metadict = {
-                        "filename": im_fn["ms"],
-                        "acc_georef": georef_accs[i],
-                        "epsg": im_epsg[i],
-                        "image_quality": im_quality[i],
-                    }
+                    dst = os.path.join(fp_ms, im_fn["ms"])
+                    if not os.path.exists(dst):
+                        os.rename(fn_ms, dst)
                     if save_jpg:
                         tif_paths = SDS_tools.get_filepath(inputs, satname)
                         SDS_preprocess.save_single_jpg(
@@ -651,6 +661,19 @@ def retrieve_images(
                 raise error
             finally:
                 try:
+                    # get image dimensions (width and height)
+                    image_path = os.path.join(fp_ms, im_fn["ms"])
+                    width, height = SDS_tools.get_image_dimensions(image_path)
+                    # write metadata in a text file for easy access
+                    filename_txt = im_fn["ms"].replace("_ms", "").replace(".tif", "")
+                    metadict = {
+                        "filename": filename_ms,
+                        "epsg": im_epsg,
+                        "acc_georef": accuracy_georef,
+                        "image_quality": image_quality,
+                        "im_width": width,
+                        "im_height": height,
+                    }
                     # no matter what attempt to write metadata
                     with open(
                         os.path.join(filepaths[0], filename_txt + ".txt"), "w"
@@ -686,11 +709,48 @@ def parse_date_from_filename(filename: str) -> datetime:
 
 
 def read_metadata_file(filepath: str) -> Dict[str, object]:
+    """
+    Reads metadata from a file and returns the metadata as a dictionary.
+
+    Parameters:
+    filepath (str): The path to the metadata file.
+
+    Returns:
+    Dict[str, Union[str, int, float]]: A dictionary containing the metadata. The keys are metadata names,
+    and the values are metadata values, which can be str, int, or float.
+    """
+    metadata_keys = [
+        "filename",
+        "epsg",
+        "acc_georef",
+        "im_quality",
+        "im_width",
+        "im_height",
+    ]
+    metadata = {}
+
     with open(filepath, "r") as f:
-        filename = f.readline().split("\t")[1].strip()
-        acc_georef = float(f.readline().split("\t")[1].strip())
-        epsg = int(f.readline().split("\t")[1].strip())
-    return {"filename": filename, "acc_georef": acc_georef, "epsg": epsg}
+        for key in metadata_keys:
+            value = f.readline().split("\t")[1].strip()
+            if key in ["epsg", "im_width", "im_height"]:
+                try:
+                    value = int(value)
+                except ValueError:
+                    try:
+                        value = float(value)
+                    except ValueError:
+                        print(
+                            f"Error: Unable to convert {key} {value} to a numeric value."
+                        )
+            elif key in ["acc_georef", "im_quality"]:
+                # check if they are quantitative values (Landsat) or Pass/Fail flags (Sentinel-2)
+                try:
+                    value = float(value)
+                except ValueError:
+                    pass  # Keep the value as a string if conversion to float fails
+            metadata[key] = value
+
+    return metadata
 
 
 def get_metadata(inputs):
@@ -717,7 +777,7 @@ def get_metadata(inputs):
 
     """
     print(f"Getting metadata")
-    # directory containing the images
+    # Construct the directory path containing the images
     filepath = os.path.join(inputs["filepath"], inputs["sitename"])
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"The directory {filepath} does not exist.")
@@ -731,29 +791,38 @@ def get_metadata(inputs):
             # update the metadata dict
             metadata[satname] = {
                 "filenames": [],
-                "acc_georef": [],
-                "epsg": [],
                 "dates": [],
+                "epsg": [],
+                "acc_georef": [],
+                "im_quality": [],
+                "im_dimensions": [],
             }
             # directory where the metadata .txt files are stored
             filepath_meta = os.path.join(sat_path, "meta")
             # get the list of filenames and sort it chronologically
             if not os.path.exists(filepath_meta):
                 continue
+            # Get the list of filenames and sort it chronologically
             filenames_meta = sorted(os.listdir(filepath_meta))
             # loop through the .txt files
             for im_meta in filenames_meta:
                 meta_filepath = os.path.join(filepath_meta, im_meta)
                 meta_info = read_metadata_file(meta_filepath)
+
+                # Append meta info to the appropriate lists in the metadata dictionary
                 metadata[satname]["filenames"].append(meta_info["filename"])
                 metadata[satname]["acc_georef"].append(meta_info["acc_georef"])
                 metadata[satname]["epsg"].append(meta_info["epsg"])
                 metadata[satname]["dates"].append(
                     parse_date_from_filename(meta_info["filename"])
                 )
+                metadata[satname]["im_quality"].append(meta_info["im_quality"])
+                metadata[satname]["im_dimensions"].append(
+                    [meta_info["im_height"], meta_info["im_width"]]
+                )
 
     # save a json file containing the metadata dict
-    metadata_json = os.path.join(filepath, inputs["sitename"] + "_metadata" + ".json")
+    metadata_json = os.path.join(filepath, f"{inputs['sitename']}_metadata.json")
     SDS_preprocess.write_to_json(metadata_json, metadata)
 
     return metadata
@@ -815,13 +884,13 @@ def check_images_available(inputs):
     im_dict_T1 = dict([])
     sum_img = 0
     for satname in inputs["sat_list"]:
-            im_list = get_image_info(
-                col_names_T1[satname],
-                satname,
-                polygon,
-                dates_str,
-                S2tile=inputs.get("S2tile",""),
-            )
+        im_list = get_image_info(
+            col_names_T1[satname],
+            satname,
+            polygon,
+            dates_str,
+            S2tile=inputs.get("S2tile", ""),
+        )
         sum_img = sum_img + len(im_list)
         print("     %s: %d images" % (satname, len(im_list)))
         im_dict_T1[satname] = im_list
@@ -890,6 +959,52 @@ def check_images_available(inputs):
     return im_dict_T1, im_dict_T2
 
 
+def get_s2cloudless(image_list: list, inputs: dict):
+    """
+    Match the list of Sentinel-2 (S2) images with the corresponding s2cloudless images.
+
+    Parameters:
+    image_list (List[Dict]): A list of dictionaries, each representing metadata for an S2 image.
+    inputs (Dict[str, Union[str, List[str]]]): A dictionary containing:
+        - 'dates': List of dates in 'YYYY-mm-dd' format as strings.
+        - 'polygon': A list of coordinates defining the polygon of interest.
+
+    Returns:
+    List[Union[Dict, List]]: A list where each element is either a dictionary containing metadata of a matched
+    s2cloudless image or an empty list if no match is found.
+    """
+    # Convert string dates to datetime objects
+    dates = [datetime.strptime(date, "%Y-%m-%d") for date in inputs["dates"]]
+    polygon = inputs["polygon"]
+    collection = "COPERNICUS/S2_CLOUD_PROBABILITY"
+    # get s2cloudless collection
+    s2cloudless_col = (
+        ee.ImageCollection(collection)
+        .filterBounds(ee.Geometry.Polygon(polygon))
+        .filterDate(dates[0], dates[1])
+    )
+    cloud_images_list = s2cloudless_col.getInfo().get("features", [])
+    # Extract image IDs from the s2cloudless collection
+    cloud_indices = [image["properties"]["system:index"] for image in cloud_images_list]
+    # match with S2 images
+    matched_cloud_images = []
+    for image_meta in image_list:
+        index = image_meta["properties"]["system:index"]
+
+        if index in cloud_indices:
+            matched_index = cloud_indices.index(index)
+            matched_cloud_images.append(cloud_images_list[matched_index])
+        else:  # append an empty list if no match is found
+            matched_cloud_images.append([])
+    # try:
+    #     matched_index = cloud_indices.index(index)
+    #     matched_cloud_images.append(cloud_images_list[matched_index])
+    # except ValueError:  # handle the case where index is not in cloud_indices
+    #     matched_cloud_images.append([])
+
+    return matched_cloud_images
+
+
 def get_image_info(collection, satname, polygon, dates, **kwargs):
     """
     Reads info about EE images for the specified collection, satellite and dates
@@ -917,11 +1032,15 @@ def get_image_info(collection, satname, polygon, dates, **kwargs):
             # get info about images
             ee_col = ee.ImageCollection(collection)
             # Initialize the collection with filterBounds and filterDate
-            col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(dates[0], dates[1])
-            # If "S2tile" key is in kwargs and its associated value is truthy (not an empty string, None, etc.), 
+            col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(
+                dates[0], dates[1]
+            )
+            # If "S2tile" key is in kwargs and its associated value is truthy (not an empty string, None, etc.),
             # then apply an additional filter to the collection.
             if kwargs.get("S2tile"):
-                col = col.filterMetadata("MGRS_TILE", "equals", kwargs["S2tile"])  # 58GGP
+                col = col.filterMetadata(
+                    "MGRS_TILE", "equals", kwargs["S2tile"]
+                )  # 58GGP
                 print(f"Only keeping user-defined S2tile: {kwargs['S2tile']}")
             im_list = col.getInfo().get("features")
             break

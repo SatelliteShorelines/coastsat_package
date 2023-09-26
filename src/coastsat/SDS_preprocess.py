@@ -204,7 +204,7 @@ def to_file(data: dict, filepath: str) -> None:
 #     return im_ms, georef, cloud_mask, im_extra, im_nodata
 
 
-def read_bands(filename: str) -> list:
+def read_bands(filename: str, satname: str = "") -> list:
     """
     Read all the raster bands of a geospatial image file using GDAL.
 
@@ -234,7 +234,14 @@ def read_bands(filename: str) -> list:
     bands = read_bands('path/to/image.tif')
     """
     data = gdal.Open(filename, gdal.GA_ReadOnly)
-    bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
+    if satname == "S2":
+        bands = [
+            data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount - 1)
+        ]
+    else:
+        bands = [
+            data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)
+        ]
     return bands
 
 
@@ -500,9 +507,11 @@ def preprocess_single(
         fn_ms = fn[0]
         data = gdal.Open(fn_ms, gdal.GA_ReadOnly)
         georef = np.array(data.GetGeoTransform())
-        bands = read_bands(fn_ms)
+        bands = read_bands(fn_ms, satname)
         im_ms = np.stack(bands, 2)
         im_ms = im_ms / 10000  # TOA scaled to 10000
+        # read s2cloudless cloud probability (last band in ms image)
+        cloud_prob = data.GetRasterBand(data.RasterCount).ReadAsArray()
 
         # image size
         nrows = im_ms.shape[0]
@@ -541,7 +550,14 @@ def preprocess_single(
                 im_nodata = morphology.dilation(im_nodata, morphology.square(5))
 
         else:
-            cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
+            # compute cloud mask using QA60 band
+            cloud_mask_QA60 = create_cloud_mask(
+                im_QA, satname, cloud_mask_issue, collection
+            )
+            # compute cloud mask using s2cloudless probability band
+            cloud_mask_s2cloudless = create_s2cloudless_mask(cloud_prob, 60)
+            # combine both cloud masks
+            cloud_mask = np.logical_or(cloud_mask_QA60, cloud_mask_s2cloudless)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
             # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
@@ -634,6 +650,32 @@ def create_cloud_mask(im_QA, satname, cloud_mask_issue, collection):
             morphology.remove_small_objects(
                 cloud_mask, min_size=100, connectivity=1, out=cloud_mask
             )
+
+    return cloud_mask
+
+
+def create_s2cloudless_mask(cloud_prob, threshold=50):
+    """
+    Creates a cloud mask using the s2cloudless band.
+
+    KV WRL 2023
+
+    Arguments:
+    -----------
+    cloud_prob: np.array
+        Image containing the s2cloudless cloud probability
+
+    Returns:
+    -----------
+    cloud_mask : np.array
+        boolean array with True if a pixel is cloudy and False otherwise
+
+    """
+    # find which pixels have bits corresponding to cloud values
+    cloud_mask = cloud_prob > threshold
+    # dilate cloud mask
+    elem = morphology.square(6)  # use a square of width 6 pixels
+    cloud_mask = morphology.binary_opening(cloud_mask, elem)  # perform image opening
 
     return cloud_mask
 
