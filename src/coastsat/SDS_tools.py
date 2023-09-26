@@ -301,6 +301,69 @@ def mask_raster(fn, mask):
     raster = None
 
 
+def get_image_bounds(fn):
+    """
+    Returns a polygon with the bounds of the image in the .tif file
+
+    KV WRL 2020
+
+    Arguments:
+    -----------
+    fn: str
+        path to the image (.tif file)
+
+    Returns:
+    -----------
+    bounds_polygon: shapely.geometry.Polygon
+        polygon with the image bounds
+
+    """
+
+    # nested functions to get the extent
+    # copied from https://gis.stackexchange.com/questions/57834/how-to-get-raster-corner-coordinates-using-python-gdal-bindings
+    def GetExtent(gt, cols, rows):
+        "Return list of corner coordinates from a geotransform"
+        ext = []
+        xarr = [0, cols]
+        yarr = [0, rows]
+        for px in xarr:
+            for py in yarr:
+                x = gt[0] + (px * gt[1]) + (py * gt[2])
+                y = gt[3] + (px * gt[4]) + (py * gt[5])
+                ext.append([x, y])
+            yarr.reverse()
+        return ext
+
+    # load .tif file and get bounds
+    if not os.path.exists(fn):
+        raise FileNotFoundError(f"{fn}")
+    data = gdal.Open(fn, gdal.GA_ReadOnly)
+    # Check if data is null meaning the open failed
+    if data is None:
+        print("TIF file: ", fn, "cannot be opened")
+        os.remove(fn)
+        raise AttributeError
+    else:
+        gt = data.GetGeoTransform()
+        cols = data.RasterXSize
+        rows = data.RasterYSize
+        ext = GetExtent(gt, cols, rows)
+
+    return geometry.Polygon(ext)
+
+
+def get_image_dimensions(image_path):
+    "function to get image dimensions with GDAL"
+    dataset = gdal.Open(image_path, gdal.GA_ReadOnly)
+    if dataset is None:
+        raise Exception("Failed to open the image file %s" % image_path)
+    width = dataset.RasterXSize
+    height = dataset.RasterYSize
+    dataset = None
+
+    return width, height
+
+
 ###################################################################################################
 # UTILITIES
 ###################################################################################################
@@ -595,17 +658,27 @@ def remove_inaccurate_georef(output, accuracy):
     Returns:
     -----------
         output_filtered: dict
-            contains the updated dictionnary
+            contains the updated dictionary
 
     """
-
     # find indices of shorelines to be removed
-    idx = np.where(
-        ~np.logical_or(
-            np.array(output["geoaccuracy"]) == -1,
-            np.array(output["geoaccuracy"]) >= accuracy,
-        )
-    )[0]
+    idx = []
+    for i in range(len(output["geoaccuracy"])):
+        geoacc = output["geoaccuracy"][i]
+        if geoacc in ["PASSED", "FAILED"]:
+            if geoacc == "PASSED":
+                idx.append(i)
+        else:
+            if geoacc <= accuracy:
+                idx.append(i)
+
+    # # find indices of shorelines to be removed
+    # idx = np.where(
+    #     ~np.logical_or(
+    #         np.array(output["geoaccuracy"]) == -1,
+    #         np.array(output["geoaccuracy"]) >= accuracy,
+    #     )
+    # )[0]
     # idx = np.where(~(np.array(output['geoaccuracy']) >= accuracy))[0]
     output_filtered = dict([])
     for key in output.keys():
@@ -863,96 +936,96 @@ def output_to_gdf(
     return pd.concat(gdf_list, ignore_index=True)
 
 
-def output_to_gdf(output, geomtype):
-    """
-    Saves the mapped shorelines as a gpd.GeoDataFrame
+# def output_to_gdf(output, geomtype):
+#     """
+#     Saves the mapped shorelines as a gpd.GeoDataFrame
 
-    KV WRL 2018
+#     KV WRL 2018
 
-    Arguments:
-    -----------
-    output: dict
-        contains the coordinates of the mapped shorelines + attributes
-    geomtype: str
-        'lines' for LineString and 'points' for Multipoint geometry
+#     Arguments:
+#     -----------
+#     output: dict
+#         contains the coordinates of the mapped shorelines + attributes
+#     geomtype: str
+#         'lines' for LineString and 'points' for Multipoint geometry
 
-    Returns:
-    -----------
-    gdf_all: gpd.GeoDataFrame
-        contains the shorelines + attributes
+#     Returns:
+#     -----------
+#     gdf_all: gpd.GeoDataFrame
+#         contains the shorelines + attributes
 
-    """
-    # loop through the mapped shorelines
-    gdf_list = []
-    for i in range(len(output["shorelines"])):
-        # skip if there shoreline is empty
-        if len(output["shorelines"][i]) == 0:
-            continue
-        else:
-            # save the geometry depending on the linestyle
-            if geomtype == "lines":
-                # linestrings must consist of 2 or more points
-                if len(output["shorelines"][i]) < 2:
-                    continue
-                geom = geometry.LineString(output["shorelines"][i])
-            elif geomtype == "points":
-                coords = output["shorelines"][i]
-                geom = geometry.MultiPoint(
-                    [(coords[_, 0], coords[_, 1]) for _ in range(coords.shape[0])]
-                )
-            else:
-                raise Exception(
-                    "geomtype %s is not an option, choose between lines or points"
-                    % geomtype
-                )
-            # save into geodataframe with attributes
-            gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(geom))
-            gdf.index = [i]
-            gdf.loc[i, "date"] = output["dates"][i].strftime("%Y-%m-%d %H:%M:%S")
-            gdf.loc[i, "satname"] = output["satname"][i]
-            gdf.loc[i, "geoaccuracy"] = output["geoaccuracy"][i]
-            gdf.loc[i, "cloud_cover"] = output["cloud_cover"][i]
-            gdf_list.append(gdf)
+#     """
+#     # loop through the mapped shorelines
+#     gdf_list = []
+#     for i in range(len(output["shorelines"])):
+#         # skip if there shoreline is empty
+#         if len(output["shorelines"][i]) == 0:
+#             continue
+#         else:
+#             # save the geometry depending on the linestyle
+#             if geomtype == "lines":
+#                 # linestrings must consist of 2 or more points
+#                 if len(output["shorelines"][i]) < 2:
+#                     continue
+#                 geom = geometry.LineString(output["shorelines"][i])
+#             elif geomtype == "points":
+#                 coords = output["shorelines"][i]
+#                 geom = geometry.MultiPoint(
+#                     [(coords[_, 0], coords[_, 1]) for _ in range(coords.shape[0])]
+#                 )
+#             else:
+#                 raise Exception(
+#                     "geomtype %s is not an option, choose between lines or points"
+#                     % geomtype
+#                 )
+#             # save into geodataframe with attributes
+#             gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(geom))
+#             gdf.index = [i]
+#             gdf.loc[i, "date"] = output["dates"][i].strftime("%Y-%m-%d %H:%M:%S")
+#             gdf.loc[i, "satname"] = output["satname"][i]
+#             gdf.loc[i, "geoaccuracy"] = output["geoaccuracy"][i]
+#             gdf.loc[i, "cloud_cover"] = output["cloud_cover"][i]
+#             gdf_list.append(gdf)
 
-    # concatenate all GeoDataFrames in the list into a single GeoDataFrame
-    gdf_all = pd.concat(gdf_list, ignore_index=True)
+#     # concatenate all GeoDataFrames in the list into a single GeoDataFrame
+#     gdf_all = pd.concat(gdf_list, ignore_index=True)
 
-    return gdf_all
+#     return gdf_all
 
-    # # loop through the mapped shorelines
-    # counter = 0
-    # gdf_all = None
-    # for i in range(len(output['shorelines'])):
-    #     # skip if there shoreline is empty
-    #     if len(output['shorelines'][i]) == 0:
-    #         continue
-    #     else:
-    #         # save the geometry depending on the linestyle
-    #         if geomtype == 'lines':
-    #             # linestrings must consist of 2 or more points
-    #             if len(output['shorelines'][i]) < 2:
-    #                 continue
-    #             geom = geometry.LineString(output['shorelines'][i])
-    #         elif geomtype == 'points':
-    #             coords = output['shorelines'][i]
-    #             geom = geometry.MultiPoint([(coords[_,0], coords[_,1]) for _ in range(coords.shape[0])])
-    #         else:
-    #             raise Exception('geomtype %s is not an option, choose between lines or points'%geomtype)
-    #         # save into geodataframe with attributes
-    #         gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(geom))
-    #         gdf.index = [i]
-    #         gdf.loc[i,'date'] = output['dates'][i].strftime('%Y-%m-%d %H:%M:%S')
-    #         gdf.loc[i,'satname'] = output['satname'][i]
-    #         gdf.loc[i,'geoaccuracy'] = output['geoaccuracy'][i]
-    #         gdf.loc[i,'cloud_cover'] = output['cloud_cover'][i]
-    #         # store into geodataframe
-    #         if counter == 0:
-    #             gdf_all = gdf
-    #         else:
-    #             gdf_all = gdf_all.append(gdf)
-    #         counter = counter + 1
+# # loop through the mapped shorelines
+# counter = 0
+# gdf_all = None
+# for i in range(len(output['shorelines'])):
+#     # skip if there shoreline is empty
+#     if len(output['shorelines'][i]) == 0:
+#         continue
+#     else:
+#         # save the geometry depending on the linestyle
+#         if geomtype == 'lines':
+#             # linestrings must consist of 2 or more points
+#             if len(output['shorelines'][i]) < 2:
+#                 continue
+#             geom = geometry.LineString(output['shorelines'][i])
+#         elif geomtype == 'points':
+#             coords = output['shorelines'][i]
+#             geom = geometry.MultiPoint([(coords[_,0], coords[_,1]) for _ in range(coords.shape[0])])
+#         else:
+#             raise Exception('geomtype %s is not an option, choose between lines or points'%geomtype)
+#         # save into geodataframe with attributes
+#         gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(geom))
+#         gdf.index = [i]
+#         gdf.loc[i,'date'] = output['dates'][i].strftime('%Y-%m-%d %H:%M:%S')
+#         gdf.loc[i,'satname'] = output['satname'][i]
+#         gdf.loc[i,'geoaccuracy'] = output['geoaccuracy'][i]
+#         gdf.loc[i,'cloud_cover'] = output['cloud_cover'][i]
+#         # store into geodataframe
+#         if counter == 0:
+#             gdf_all = gdf
+#         else:
+#             gdf_all = gdf_all.append(gdf)
+#         counter = counter + 1
 
-    # return gdf_all
+# return gdf_all
 
 
 def transects_to_gdf(transects):
@@ -1001,57 +1074,6 @@ def transects_to_gdf(transects):
     #         gdf_all = gdf_all.append(gdf)
 
     # return gdf_all
-
-
-def get_image_bounds(fn):
-    """
-    Returns a polygon with the bounds of the image in the .tif file
-
-    KV WRL 2020
-
-    Arguments:
-    -----------
-    fn: str
-        path to the image (.tif file)
-
-    Returns:
-    -----------
-    bounds_polygon: shapely.geometry.Polygon
-        polygon with the image bounds
-
-    """
-
-    # nested functions to get the extent
-    # copied from https://gis.stackexchange.com/questions/57834/how-to-get-raster-corner-coordinates-using-python-gdal-bindings
-    def GetExtent(gt, cols, rows):
-        "Return list of corner coordinates from a geotransform"
-        ext = []
-        xarr = [0, cols]
-        yarr = [0, rows]
-        for px in xarr:
-            for py in yarr:
-                x = gt[0] + (px * gt[1]) + (py * gt[2])
-                y = gt[3] + (px * gt[4]) + (py * gt[5])
-                ext.append([x, y])
-            yarr.reverse()
-        return ext
-
-    # load .tif file and get bounds
-    if not os.path.exists(fn):
-        raise FileNotFoundError(f"{fn}")
-    data = gdal.Open(fn, gdal.GA_ReadOnly)
-    # Check if data is null meaning the open failed
-    if data is None:
-        print("TIF file: ", fn, "cannot be opened")
-        os.remove(fn)
-        raise AttributeError
-    else:
-        gt = data.GetGeoTransform()
-        cols = data.RasterXSize
-        rows = data.RasterYSize
-        ext = GetExtent(gt, cols, rows)
-
-    return geometry.Polygon(ext)
 
 
 def smallest_rectangle(polygon):
