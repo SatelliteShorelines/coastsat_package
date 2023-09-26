@@ -552,12 +552,19 @@ def remove_duplicates(output):
             elif np.any(empty_bool):  # if one empty remove that one
                 idx_remove.append(pair[np.where(empty_bool)[0][0]])
             else:  # remove the shorter shoreline and keep the longer one
-                sl0 = geometry.LineString(output["shorelines"][pair[0]])
-                sl1 = geometry.LineString(output["shorelines"][pair[1]])
-                if sl0.length >= sl1.length:
-                    idx_remove.append(pair[1])
-                else:
-                    idx_remove.append(pair[0])
+                satnames = [output["satname"][_] for _ in pair]
+                # keep Landsat 9 if it duplicates Landsat 7
+                if "L9" in satnames and "L7" in satnames:
+                    idx_remove.append(
+                        pair[np.where([_ == "L7" for _ in satnames])[0][0]]
+                    )
+                else:  # keep the longest shorelines
+                    sl0 = geometry.LineString(output["shorelines"][pair[0]])
+                    sl1 = geometry.LineString(output["shorelines"][pair[1]])
+                    if sl0.length >= sl1.length:
+                        idx_remove.append(pair[1])
+                    else:
+                        idx_remove.append(pair[0])
         # create a new output structure with all the duplicates removed
         idx_remove = sorted(idx_remove)
         idx_all = np.linspace(0, len(dates) - 1, len(dates)).astype(int)
@@ -714,12 +721,13 @@ def transects_from_geojson(filename):
 
     """
 
-    gdf = gpd.read_file(filename)
+    gdf = gpd.read_file(filename, driver="GeoJSON")
     transects = dict([])
     for i in gdf.index:
         transects[gdf.loc[i, "name"]] = np.array(gdf.loc[i, "geometry"].coords)
 
     print("%d transects have been loaded" % len(transects.keys()))
+    print("coordinates are in epsg:%d" % gdf.crs.to_epsg())
 
     return transects
 
