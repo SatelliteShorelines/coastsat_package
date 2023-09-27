@@ -234,7 +234,9 @@ def read_bands(filename: str, satname: str = "") -> list:
     bands = read_bands('path/to/image.tif')
     """
     data = gdal.Open(filename, gdal.GA_ReadOnly)
-    if satname == "S2":
+    # save the contents of each raster band as an array and save each array to the bands list
+    # save separate NumPy array for each raster band in the dataset, with each array representing the pixel values of the corresponding band
+    if satname == "S2" and data.RasterCount == 5:
         bands = [
             data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount - 1)
         ]
