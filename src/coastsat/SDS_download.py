@@ -339,7 +339,7 @@ def retrieve_images(
                 # download the images as .tif files
                 bands = dict([])
                 im_fn = dict([])
-                # first delete dimensions key from dictionnary
+                # first delete dimensions key from dictionary
                 # otherwise the entire image is extracted (don't know why)
                 im_bands = image_ee.getInfo()["bands"]
                 for j in range(len(im_bands)):
@@ -556,21 +556,6 @@ def retrieve_images(
                         "swir": filter_bands(im_bands, bands_id[5:6]),
                         "mask": filter_bands(im_bands, bands_id[-1:]),
                     }
-                    # bands["ms"] = [
-                    #     im_bands[_]
-                    #     for _ in range(len(im_bands))
-                    #     if im_bands[_]["id"] in bands_id[:5]
-                    # ]
-                    # bands["swir"] = [
-                    #     im_bands[_]
-                    #     for _ in range(len(im_bands))
-                    #     if im_bands[_]["id"] in bands_id[5:6]
-                    # ]
-                    # bands["mask"] = [
-                    #     im_bands[_]
-                    #     for _ in range(len(im_bands))
-                    #     if im_bands[_]["id"] in bands_id[-1:]
-                    # ]
                     # adjust polygon for both ms and pan bands
                     proj_ms = image_ee.select("B1").projection()
                     proj_swir = image_ee.select("B11").projection()
@@ -708,17 +693,7 @@ def parse_date_from_filename(filename: str) -> datetime:
     )
 
 
-def read_metadata_file(filepath: str) -> Dict[str, object]:
-    """
-    Reads metadata from a file and returns the metadata as a dictionary.
-
-    Parameters:
-    filepath (str): The path to the metadata file.
-
-    Returns:
-    Dict[str, Union[str, int, float]]: A dictionary containing the metadata. The keys are metadata names,
-    and the values are metadata values, which can be str, int, or float.
-    """
+def read_metadata_file(filepath: str) -> Dict[str, Union[str, int, float]]:
     metadata_keys = [
         "filename",
         "epsg",
@@ -727,11 +702,41 @@ def read_metadata_file(filepath: str) -> Dict[str, object]:
         "im_width",
         "im_height",
     ]
-    metadata = {}
+
+    # Mapping of actual file keys to metadata keys
+    key_mapping = {"image_quality": "im_quality"}
+
+    # Initialize the metadata dictionary with default values.
+    metadata = {
+        "filename": "",
+        "epsg": "",
+        "acc_georef": -1,
+        "im_quality": -1,
+        "im_width": -1,
+        "im_height": -1,
+    }
 
     with open(filepath, "r") as f:
-        for key in metadata_keys:
-            value = f.readline().split("\t")[1].strip()
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue  # Skip empty lines
+
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue  # Skip lines without a tab character
+
+            key = parts[0].strip()
+            value = parts[1].strip()
+
+            # Map the actual key in the file to the metadata key
+            key = key_mapping.get(key, key)
+
+            # If the mapped key is not in metadata_keys, then skip it.
+            if key not in metadata_keys:
+                continue
+
+            # Convert value to the appropriate type based on the key
             if key in ["epsg", "im_width", "im_height"]:
                 try:
                     value = int(value)
@@ -743,11 +748,12 @@ def read_metadata_file(filepath: str) -> Dict[str, object]:
                             f"Error: Unable to convert {key} {value} to a numeric value."
                         )
             elif key in ["acc_georef", "im_quality"]:
-                # check if they are quantitative values (Landsat) or Pass/Fail flags (Sentinel-2)
                 try:
                     value = float(value)
                 except ValueError:
                     pass  # Keep the value as a string if conversion to float fails
+
+            # Update the metadata dictionary with the extracted key-value pair.
             metadata[key] = value
 
     return metadata
@@ -817,9 +823,13 @@ def get_metadata(inputs):
                     parse_date_from_filename(meta_info["filename"])
                 )
                 metadata[satname]["im_quality"].append(meta_info["im_quality"])
-                metadata[satname]["im_dimensions"].append(
-                    [meta_info["im_height"], meta_info["im_width"]]
-                )
+                # if the metadata file didn't contain imheight or width set this as an empty list
+                if meta_info["im_height"] == -1 or meta_info["im_height"] == -1:
+                    metadata[satname]["im_dimensions"].append([])
+                else:
+                    metadata[satname]["im_dimensions"].append(
+                        [meta_info["im_height"], meta_info["im_width"]]
+                    )
 
     # save a json file containing the metadata dict
     metadata_json = os.path.join(filepath, f"{inputs['sitename']}_metadata.json")
