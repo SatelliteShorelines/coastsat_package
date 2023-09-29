@@ -245,13 +245,13 @@ def retrieve_images(
     # check image availabiliy and retrieve list of images
     im_dict_T1, im_dict_T2 = check_images_available(inputs)
 
-    # if user also wants to download T2 images, merge both lists
-    if "include_T2" in inputs.keys():
-        for key in inputs["sat_list"]:
-            if key == "S2":
-                continue
-            else:
-                im_dict_T1[key] += im_dict_T2[key]
+    # Merge tier 2 imagery into dictionary
+    for key in inputs["sat_list"]:
+        if key == "S2":
+            continue
+        else:
+            im_dict_T1[key] += im_dict_T2[key]
+            
 
     # remove UTM duplicates in S2 collections (they provide several projections for same images)
     if "S2" in inputs["sat_list"] and len(im_dict_T1["S2"]) > 0:
@@ -702,10 +702,10 @@ def read_metadata_file(filepath: str) -> Dict[str, Union[str, int, float]]:
         "im_width",
         "im_height",
     ]
-    
+
     # Mapping of actual file keys to metadata keys
     key_mapping = {"image_quality": "im_quality"}
-    
+
     # Initialize the metadata dictionary with default values.
     metadata = {
         "filename": "",
@@ -713,29 +713,29 @@ def read_metadata_file(filepath: str) -> Dict[str, Union[str, int, float]]:
         "acc_georef": -1,
         "im_quality": -1,
         "im_width": -1,
-        "im_height": -1
+        "im_height": -1,
     }
-    
+
     with open(filepath, "r") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue  # Skip empty lines
-            
+
             parts = line.split("\t")
             if len(parts) < 2:
                 continue  # Skip lines without a tab character
-            
+
             key = parts[0].strip()
             value = parts[1].strip()
-            
+
             # Map the actual key in the file to the metadata key
             key = key_mapping.get(key, key)
-            
+
             # If the mapped key is not in metadata_keys, then skip it.
             if key not in metadata_keys:
                 continue
-            
+
             # Convert value to the appropriate type based on the key
             if key in ["epsg", "im_width", "im_height"]:
                 try:
@@ -744,18 +744,19 @@ def read_metadata_file(filepath: str) -> Dict[str, Union[str, int, float]]:
                     try:
                         value = float(value)
                     except ValueError:
-                        print(f"Error: Unable to convert {key} {value} to a numeric value.")
+                        print(
+                            f"Error: Unable to convert {key} {value} to a numeric value."
+                        )
             elif key in ["acc_georef", "im_quality"]:
                 try:
                     value = float(value)
                 except ValueError:
                     pass  # Keep the value as a string if conversion to float fails
-            
+
             # Update the metadata dictionary with the extracted key-value pair.
             metadata[key] = value
-    
-    return metadata
 
+    return metadata
 
 
 def get_metadata(inputs):
@@ -821,7 +822,7 @@ def get_metadata(inputs):
                     parse_date_from_filename(meta_info["filename"])
                 )
                 metadata[satname]["im_quality"].append(meta_info["im_quality"])
-                # if the metadata file didn't contain imheight or width set this as an empty list
+                # if the metadata file didn't contain im_height or im_width set this as an empty list
                 if meta_info["im_height"] == -1 or meta_info["im_height"] == -1:
                     metadata[satname]["im_dimensions"].append([])
                 else:
