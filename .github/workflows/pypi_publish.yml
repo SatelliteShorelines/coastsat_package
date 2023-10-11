@@ -1,12 +1,18 @@
-name: build
+# ✍️ Description:
+# This workflow will be triggered automatically when a tag is pushed to the repo.
+# It will create a create a new pip package to release it to pypi with the version specificed by the git tag.
+# 🚨 GTHUB SECRETS REQUIRED: secrets.PYPI_TOKEN
+#                            - Used to publish the package to the pypi
+name: Publish to Package to PyPi
 on:
   push:
-    branches: [master]
+    # only release a new pip package if the commit it tagged ex.v1.0.3 or v1.2.0dev1
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+a[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+b[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+rc[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+dev[0-9]+"
   workflow_dispatch:
 
 jobs:
@@ -19,14 +25,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          fetch-depth: "100"
+          fetch-depth: "1"
       - uses: actions/setup-python@v4
         with:
           python-version: "3.10"
-      # - name: Install dependencies
-      #   run: |
-      #     python -m pip install --upgrade pip
-      #     pip install setuptools wheel twine
       - name: Install pypa/build
         run: >-
           python -m
