@@ -251,7 +251,6 @@ def retrieve_images(
             continue
         else:
             im_dict_T1[key] += im_dict_T2[key]
-            
 
     # remove UTM duplicates in S2 collections (they provide several projections for same images)
     if "S2" in inputs["sat_list"] and len(im_dict_T1["S2"]) > 0:
@@ -288,6 +287,9 @@ def retrieve_images(
     suffix = ".tif"
     count = 1
     num_satellites = len(im_dict_T1.keys())
+    # total allowed errors throught download process
+    MAX_ALLOWED_ERRORS = 5
+    error_counter = 0
     for satname in tqdm(
         im_dict_T1.keys(), desc=f"Downloading Imagery for {num_satellites} satellites"
     ):
@@ -305,6 +307,14 @@ def retrieve_images(
             leave=True,
         ):
             try:
+                # initalize the variables
+                # filepath (fp) for the multispectural file
+                fp_ms = ""
+                # store the bands availble
+                bands = dict([])
+                # dictionary containing the filepaths for each type of file downloaded
+                im_fn = dict([])
+
                 # get image metadata
                 im_meta = im_dict_T1[satname][i]
 
@@ -336,9 +346,6 @@ def retrieve_images(
                     cloud_prob = im_cloud.select("probability").rename("s2cloudless")
                     image_ee = image_ee.addBands(cloud_prob)
 
-                # download the images as .tif files
-                bands = dict([])
-                im_fn = dict([])
                 # first delete dimensions key from dictionary
                 # otherwise the entire image is extracted (don't know why)
                 im_bands = image_ee.getInfo()["bands"]
@@ -643,28 +650,39 @@ def retrieve_images(
                             apply_cloud_mask=apply_cloud_mask,
                         )
             except Exception as error:
-                raise error
+                print(
+                    f"The download for satellite {satname} {im_meta['id']} failed.\n {error}"
+                )
+                error_counter += 1
+                if error_counter >= MAX_ALLOWED_ERRORS + 1:
+                    print(
+                        f"\n More than {MAX_ALLOWED_ERRORS} download failure occurred. Halting download."
+                    )
+                    raise error
             finally:
                 try:
                     # get image dimensions (width and height)
-                    image_path = os.path.join(fp_ms, im_fn["ms"])
-                    width, height = SDS_tools.get_image_dimensions(image_path)
-                    # write metadata in a text file for easy access
-                    filename_txt = im_fn["ms"].replace("_ms", "").replace(".tif", "")
-                    metadict = {
-                        "filename": filename_ms,
-                        "epsg": im_epsg,
-                        "acc_georef": accuracy_georef,
-                        "image_quality": image_quality,
-                        "im_width": width,
-                        "im_height": height,
-                    }
-                    # no matter what attempt to write metadata
-                    with open(
-                        os.path.join(filepaths[0], filename_txt + ".txt"), "w"
-                    ) as f:
-                        for key in metadict.keys():
-                            f.write("%s\t%s\n" % (key, metadict[key]))
+                    if fp_ms:
+                        image_path = os.path.join(fp_ms, im_fn["ms"])
+                        width, height = SDS_tools.get_image_dimensions(image_path)
+                        # write metadata in a text file for easy access
+                        filename_txt = (
+                            im_fn["ms"].replace("_ms", "").replace(".tif", "")
+                        )
+                        metadict = {
+                            "filename": filename_ms,
+                            "epsg": im_epsg,
+                            "acc_georef": accuracy_georef,
+                            "image_quality": image_quality,
+                            "im_width": width,
+                            "im_height": height,
+                        }
+                        # no matter what attempt to write metadata
+                        with open(
+                            os.path.join(filepaths[0], filename_txt + ".txt"), "w"
+                        ) as f:
+                            for key in metadict.keys():
+                                f.write("%s\t%s\n" % (key, metadict[key]))
                 except Exception as e:
                     print(
                         f"Was not able to save the metadata for the last download that failed. \n{e}"
