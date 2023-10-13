@@ -187,6 +187,31 @@ def filter_bands(bands_source, band_ids):
     return [band for band in bands_source if band["id"] in band_ids]
 
 
+def merge_image_tiers(inputs, im_dict_T1, im_dict_T2):
+    """
+    Merges im_dict_T2 into im_dict_T1 based on the keys provided in inputs["sat_list"].
+    Parameters:
+    - inputs: Dictionary with "sat_list" as one of its keys containing a list of keys to check.
+    - im_dict_T1: First dictionary to merge into.
+    - im_dict_T2: Second dictionary containing values to be added to im_dict_T1.
+    Returns:
+    - Updated im_dict_T1 after merging.
+    """
+
+    # Merge tier 2 imagery into dictionary
+    for key in inputs["sat_list"]:
+        if key == "S2":
+            continue
+        else:
+            # Check if key exists in both dictionaries
+            if key in im_dict_T1 and key in im_dict_T2:
+                im_dict_T1[key] += im_dict_T2[key]
+            elif key in im_dict_T2:  # If key only exists in im_dict_T2
+                im_dict_T1[key] = im_dict_T2[key]  # Add it to im_dict_T1
+
+    return im_dict_T1
+
+
 def retrieve_images(
     inputs,
     cloud_threshold: float = 99.9,
@@ -245,12 +270,19 @@ def retrieve_images(
     # check image availabiliy and retrieve list of images
     im_dict_T1, im_dict_T2 = check_images_available(inputs)
 
+    # merge the two image collections tiers into a single dictionary
+    im_dict_T1 = merge_image_tiers(inputs, im_dict_T1, im_dict_T2)
+
     # Merge tier 2 imagery into dictionary
     for key in inputs["sat_list"]:
         if key == "S2":
             continue
         else:
-            im_dict_T1[key] += im_dict_T2[key]
+            # Check if key exists in both dictionaries
+            if key in im_dict_T1 and key in im_dict_T2:
+                im_dict_T1[key] += im_dict_T2[key]
+            elif key in im_dict_T2:  # If key only exists in im_dict_T2
+                im_dict_T1[key] = im_dict_T2[key]  # Add it to im_dict_T1
 
     # remove UTM duplicates in S2 collections (they provide several projections for same images)
     if "S2" in inputs["sat_list"] and len(im_dict_T1["S2"]) > 0:
