@@ -407,6 +407,7 @@ def retrieve_images(
                         )
                     except Exception as download_error:
                         error_counter += 1
+                        raise download_error
                     # create filename for image
                     for key in bands.keys():
                         im_fn[key] = (
@@ -513,7 +514,7 @@ def retrieve_images(
                         )
                     except Exception as download_error:
                         error_counter += 1
-
+                        raise download_error
                     # create filename for both images (ms and pan)
                     for key in bands.keys():
                         im_fn[key] = (
@@ -622,6 +623,7 @@ def retrieve_images(
                         )
                     except Exception as download_error:
                         error_counter += 1
+                        raise download_error
                     # create filename for the three images (ms, swir and mask)
                     for key in bands.keys():
                         im_fn[key] = (
