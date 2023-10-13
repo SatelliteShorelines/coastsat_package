@@ -273,17 +273,6 @@ def retrieve_images(
     # merge the two image collections tiers into a single dictionary
     im_dict_T1 = merge_image_tiers(inputs, im_dict_T1, im_dict_T2)
 
-    # Merge tier 2 imagery into dictionary
-    for key in inputs["sat_list"]:
-        if key == "S2":
-            continue
-        else:
-            # Check if key exists in both dictionaries
-            if key in im_dict_T1 and key in im_dict_T2:
-                im_dict_T1[key] += im_dict_T2[key]
-            elif key in im_dict_T2:  # If key only exists in im_dict_T2
-                im_dict_T1[key] = im_dict_T2[key]  # Add it to im_dict_T1
-
     # remove UTM duplicates in S2 collections (they provide several projections for same images)
     if "S2" in inputs["sat_list"] and len(im_dict_T1["S2"]) > 0:
         im_dict_T1["S2"] = filter_S2_collection(im_dict_T1["S2"])
