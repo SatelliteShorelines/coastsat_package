@@ -320,7 +320,7 @@ def retrieve_images(
     count = 1
     num_satellites = len(im_dict_T1.keys())
     # total allowed errors throught download process
-    MAX_ALLOWED_ERRORS = 5
+    MAX_ALLOWED_ERRORS = 10
     error_counter = 0
     for satname in tqdm(
         im_dict_T1.keys(), desc=f"Downloading Imagery for {num_satellites} satellites"
@@ -331,7 +331,8 @@ def retrieve_images(
         # initialise variables and loop through images
         bands_id = bands_dict[satname]
         all_names = []  # list for detecting duplicates
-
+        # reset the error counter for each satellite
+        error_counter = 0
         # loop through each image
         for i in tqdm(
             range(len(im_dict_T1[satname])),
@@ -399,10 +400,13 @@ def retrieve_images(
                     # adjust polygon to match image coordinates so that there is no resampling
                     proj = image_ee.select("B1").projection()
                     ee_region = adjust_polygon(inputs["polygon"], proj)
-                    # download .tif from EE (one file with ms bands and one file with QA band)
-                    fn_ms, fn_QA = download_tif(
-                        image_ee, ee_region, bands["ms"], fp_ms, satname
-                    )
+                    try:
+                        # download .tif from EE (one file with ms bands and one file with QA band)
+                        fn_ms, fn_QA = download_tif(
+                            image_ee, ee_region, bands["ms"], fp_ms, satname
+                        )
+                    except Exception as download_error:
+                        error_counter += 1
                     # create filename for image
                     for key in bands.keys():
                         im_fn[key] = (
@@ -500,12 +504,15 @@ def retrieve_images(
                     ee_region_pan = adjust_polygon(inputs["polygon"], proj_pan)
 
                     # download both ms and pan bands from EE
-                    fn_ms, fn_QA = download_tif(
-                        image_ee, ee_region_ms, bands["ms"], fp_ms, satname
-                    )
-                    fn_pan = download_tif(
-                        image_ee, ee_region_pan, bands["pan"], fp_pan, satname
-                    )
+                    try:
+                        fn_ms, fn_QA = download_tif(
+                            image_ee, ee_region_ms, bands["ms"], fp_ms, satname
+                        )
+                        fn_pan = download_tif(
+                            image_ee, ee_region_pan, bands["pan"], fp_pan, satname
+                        )
+                    except Exception as download_error:
+                        error_counter += 1
 
                     # create filename for both images (ms and pan)
                     for key in bands.keys():
@@ -603,15 +610,18 @@ def retrieve_images(
                     ee_region_swir = adjust_polygon(inputs["polygon"], proj_swir)
                     ee_region_mask = adjust_polygon(inputs["polygon"], proj_mask)
                     # download the ms, swir and QA bands from EE
-                    fn_ms = download_tif(
-                        image_ee, ee_region_ms, bands["ms"], fp_ms, satname
-                    )
-                    fn_swir = download_tif(
-                        image_ee, ee_region_swir, bands["swir"], fp_swir, satname
-                    )
-                    fn_QA = download_tif(
-                        image_ee, ee_region_mask, bands["mask"], fp_mask, satname
-                    )
+                    try:
+                        fn_ms = download_tif(
+                            image_ee, ee_region_ms, bands["ms"], fp_ms, satname
+                        )
+                        fn_swir = download_tif(
+                            image_ee, ee_region_swir, bands["swir"], fp_swir, satname
+                        )
+                        fn_QA = download_tif(
+                            image_ee, ee_region_mask, bands["mask"], fp_mask, satname
+                        )
+                    except Exception as download_error:
+                        error_counter += 1
                     # create filename for the three images (ms, swir and mask)
                     for key in bands.keys():
                         im_fn[key] = (
@@ -685,12 +695,12 @@ def retrieve_images(
                 print(
                     f"The download for satellite {satname} {im_meta['id']} failed.\n {error}"
                 )
-                error_counter += 1
                 if error_counter >= MAX_ALLOWED_ERRORS + 1:
                     print(
                         f"\n More than {MAX_ALLOWED_ERRORS} download failure occurred. Halting download."
                     )
                     raise error
+                continue
             finally:
                 try:
                     # get image dimensions (width and height)
