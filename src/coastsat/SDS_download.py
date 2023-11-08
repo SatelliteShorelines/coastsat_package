@@ -11,9 +11,10 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import pdb
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Tuple
 import time
 from functools import wraps
+import traceback
 
 # earth engine module
 import ee
@@ -42,25 +43,75 @@ from coastsat import SDS_preprocess, SDS_tools, gdal_merge
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 gdal.PushErrorHandler("CPLQuietErrorHandler")
 
+from urllib3.exceptions import ReadTimeoutError
+
+
+# Custom exception classes
+class RequestSizeExceededError(Exception):
+    pass
+
+
+class ConnectionLostError(Exception):
+    pass
+
+
+class TooManyRequests(Exception):
+    pass
+
+
+def interpret_ee_exception(e):
+    error_message = str(e)
+    if (
+        "Total request size" in error_message
+        and "must be less than or equal to" in error_message
+    ):
+        raise RequestSizeExceededError(
+            "The data request size exceeds the maximum limit."
+        )
+    elif "Connection lost" in error_message or "connection" in error_message.lower():
+        raise ConnectionLostError("The connection was lost or failed.")
+    else:
+        # Re-raise the original exception if it does not match the expected errors
+        raise
+
+
+def sleep_or_exception(file_id: str, i: int, max_tries: int, e: Exception):
+    # Handle connection lost error specifically and attempt to retry
+    print(f"Attempt {i+1} failed: {str(e)}")
+    if i + 1 == max_tries:
+        raise TooManyRequests(
+            f"Failed to download after {max_tries} attempts : {file_id}"
+        )
+    else:
+        time.sleep(1)
+
 
 # decorator to try download function again and wait 1 second in between
 def retry(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         max_tries = 3
+        image_id = kwargs.get(
+            "image_id", "Unknown"
+        )  # Get image_id from kwargs or use 'Unknown'
         for i in range(max_tries):
             try:
                 return func(*args, **kwargs)
-            except Exception as e:
-                print(f"Attempt {i+1} failed: {str(e)}")
-                if i + 1 == max_tries:
-                    filename = args[3]  # access fp_ms(aka filename) from args tuple
-                    print(
-                        f"Too many attempts, crashed while downloading image {filename}"
+            # attempt to handle ee exceptions first then handle other exceptions
+            except ee.ee_exception.EEException as e:
+                try:
+                    interpret_ee_exception(e)
+                except RequestSizeExceededError as request_limit_exceeded:
+                    # Handle request size exceeded error specifically
+                    raise RequestSizeExceededError(
+                        f"{image_id} download failed to download due request size exceeding maximum limit likely due to corruption."
                     )
-                    raise e
-                else:
-                    time.sleep(1)
+                except ConnectionLostError as connection_error:
+                    sleep_or_exception(image_id, i, max_tries, connection_error)
+                except Exception as e:
+                    sleep_or_exception(image_id, i, max_tries, e)
+            except Exception as e:
+                sleep_or_exception(image_id, i, max_tries, e)
 
     return wrapper
 
@@ -281,6 +332,7 @@ def retrieve_images(
 
     # create a new directory for this site with the name of the site
     im_folder = os.path.join(inputs["filepath"], inputs["sitename"])
+    print(f"im_folder: {im_folder}")
     if not os.path.exists(im_folder):
         os.makedirs(im_folder)
 
@@ -356,7 +408,6 @@ def retrieve_images(
 
                 # select image by id
                 image_ee = ee.Image(im_meta["id"])
-
                 # for S2 add s2cloudless probability band
                 if satname == "S2":
                     if len(im_dict_s2cloudless[i]) == 0:
@@ -389,14 +440,15 @@ def retrieve_images(
                     # adjust polygon to match image coordinates so that there is no resampling
                     proj = image_ee.select("B1").projection()
                     ee_region = adjust_polygon(inputs["polygon"], proj)
-                    try:
-                        # download .tif from EE (one file with ms bands and one file with QA band)
-                        fn_ms, fn_QA = download_tif(
-                            image_ee, ee_region, bands["ms"], fp_ms, satname
-                        )
-                    except Exception as download_error:
-                        error_counter += 1
-                        raise download_error
+                    # download .tif from EE (one file with ms bands and one file with QA band)
+                    fn_ms, fn_QA = download_tif(
+                        image_ee,
+                        ee_region,
+                        bands["ms"],
+                        fp_ms,
+                        satname,
+                        image_id=im_meta["id"],
+                    )
                     # create filename for image
                     for key in bands.keys():
                         im_fn[key] = (
@@ -494,16 +546,22 @@ def retrieve_images(
                     ee_region_pan = adjust_polygon(inputs["polygon"], proj_pan)
 
                     # download both ms and pan bands from EE
-                    try:
-                        fn_ms, fn_QA = download_tif(
-                            image_ee, ee_region_ms, bands["ms"], fp_ms, satname
-                        )
-                        fn_pan = download_tif(
-                            image_ee, ee_region_pan, bands["pan"], fp_pan, satname
-                        )
-                    except Exception as download_error:
-                        error_counter += 1
-                        raise download_error
+                    fn_ms, fn_QA = download_tif(
+                        image_ee,
+                        ee_region_ms,
+                        bands["ms"],
+                        fp_ms,
+                        satname,
+                        image_id=im_meta["id"],
+                    )
+                    fn_pan = download_tif(
+                        image_ee,
+                        ee_region_pan,
+                        bands["pan"],
+                        fp_pan,
+                        satname,
+                        image_id=im_meta["id"],
+                    )
                     # create filename for both images (ms and pan)
                     for key in bands.keys():
                         im_fn[key] = (
@@ -600,19 +658,31 @@ def retrieve_images(
                     ee_region_swir = adjust_polygon(inputs["polygon"], proj_swir)
                     ee_region_mask = adjust_polygon(inputs["polygon"], proj_mask)
                     # download the ms, swir and QA bands from EE
-                    try:
-                        fn_ms = download_tif(
-                            image_ee, ee_region_ms, bands["ms"], fp_ms, satname
-                        )
-                        fn_swir = download_tif(
-                            image_ee, ee_region_swir, bands["swir"], fp_swir, satname
-                        )
-                        fn_QA = download_tif(
-                            image_ee, ee_region_mask, bands["mask"], fp_mask, satname
-                        )
-                    except Exception as download_error:
-                        error_counter += 1
-                        raise download_error
+                    fn_ms = download_tif(
+                        image_ee,
+                        ee_region_ms,
+                        bands["ms"],
+                        fp_ms,
+                        satname,
+                        image_id=im_meta["id"],
+                    )
+                    fn_swir = download_tif(
+                        image_ee,
+                        ee_region_swir,
+                        bands["swir"],
+                        fp_swir,
+                        satname,
+                        image_id=im_meta["id"],
+                    )
+                    fn_QA = download_tif(
+                        image_ee,
+                        ee_region_mask,
+                        bands["mask"],
+                        fp_mask,
+                        satname,
+                        image_id=im_meta["id"],
+                    )
+
                     # create filename for the three images (ms, swir and mask)
                     for key in bands.keys():
                         im_fn[key] = (
@@ -684,19 +754,19 @@ def retrieve_images(
                         )
             except Exception as error:
                 print(
-                    f"The download for satellite {satname} {im_meta['id']} failed.\n {error}"
+                    f"The download for satellite {satname} {im_meta.get('id','unknown')} failed due to \n {error}"
                 )
-                if error_counter >= MAX_ALLOWED_ERRORS + 1:
-                    print(
-                        f"\n More than {MAX_ALLOWED_ERRORS} download failure occurred. Halting download."
-                    )
-                    raise error
                 continue
             finally:
                 try:
                     # get image dimensions (width and height)
                     if fp_ms:
-                        image_path = os.path.join(fp_ms, im_fn["ms"])
+                        if im_fn.get("ms", "unknown") == "unknown":
+                            raise Exception(
+                                f"Could not find ms band filename {im_meta.get('id','unknown')}"
+                            )
+                        image_path = os.path.join(fp_ms, im_fn.get("ms", "unknown"))
+
                         width, height = SDS_tools.get_image_dimensions(image_path)
                         # write metadata in a text file for easy access
                         filename_txt = (
@@ -718,7 +788,7 @@ def retrieve_images(
                                 f.write("%s\t%s\n" % (key, metadict[key]))
                 except Exception as e:
                     print(
-                        f"Was not able to save the metadata for the last download that failed. \n{e}"
+                        f"Could not save metadata for {im_meta.get('id','unknown')} that failed.\n{e}"
                     )
 
     # once all images have been downloaded, load metadata from .txt files
@@ -1192,7 +1262,14 @@ def adjust_polygon(polygon, proj):
 
 # decorator to try the download up to 3 times
 @retry
-def download_tif(image, polygon, bands, filepath, satname):
+def download_tif(
+    image: ee.Image,
+    polygon: list,
+    bands: list[dict],
+    filepath: str,
+    satname: str,
+    **kwargs,
+) -> Union[str, Tuple[str, str]]:
     """
     Downloads a .TIF image from the ee server. The image is downloaded as a
     zip file then moved to the working directory, unzipped and stacked into a
