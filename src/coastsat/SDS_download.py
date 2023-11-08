@@ -35,6 +35,7 @@ from scipy import ndimage
 
 # from tqdm import tqdm
 from tqdm.auto import tqdm
+import logging
 
 
 # CoastSat modules
@@ -43,7 +44,35 @@ from coastsat import SDS_preprocess, SDS_tools, gdal_merge
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 gdal.PushErrorHandler("CPLQuietErrorHandler")
 
-from urllib3.exceptions import ReadTimeoutError
+
+def setup_logger(folder, base_filename="download_report"):
+    # Determine the next available log file number
+    i = 1
+    while True:
+        log_filename = f"{base_filename}{i}.txt" if i > 1 else f"{base_filename}.txt"
+        log_filepath = os.path.join(folder, log_filename)
+        if not os.path.exists(log_filepath):
+            break
+        i += 1
+
+    # Create a custom logger
+    logger = logging.getLogger("satellite_download_logger")
+    logger.setLevel(logging.ERROR)  # Log errors and above
+
+    # Create handlers
+    file_handler = logging.FileHandler(log_filepath)
+    file_handler.setLevel(logging.ERROR)
+
+    # Create formatters and add it to handlers
+    log_format = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    file_handler.setFormatter(log_format)
+
+    # Add handlers to the logger
+    logger.addHandler(file_handler)
+
+    return logger
 
 
 # Custom exception classes
@@ -104,7 +133,7 @@ def retry(func):
                 except RequestSizeExceededError as request_limit_exceeded:
                     # Handle request size exceeded error specifically
                     raise RequestSizeExceededError(
-                        f"{image_id} download failed to download due request size exceeding maximum limit likely due to corruption."
+                        f"{image_id} download failed to download due request size exceeding maximum limit likely due to file corruption."
                     )
                 except ConnectionLostError as connection_error:
                     sleep_or_exception(image_id, i, max_tries, connection_error)
@@ -315,6 +344,12 @@ def retrieve_images(
         date, filename, georeferencing accuracy and image coordinate reference system
 
     """
+    # create a new directory for this site with the name of the site
+    im_folder = os.path.join(inputs["filepath"], inputs["sitename"])
+    if not os.path.exists(im_folder):
+        os.makedirs(im_folder)
+    # Initialize the logger
+    logger = setup_logger(im_folder)
     # initialise connection with GEE server
     ee.Initialize()
 
@@ -329,12 +364,6 @@ def retrieve_images(
         im_dict_T1["S2"] = filter_S2_collection(im_dict_T1["S2"])
         # get s2cloudless collection
         im_dict_s2cloudless = get_s2cloudless(im_dict_T1["S2"], inputs)
-
-    # create a new directory for this site with the name of the site
-    im_folder = os.path.join(inputs["filepath"], inputs["sitename"])
-    print(f"im_folder: {im_folder}")
-    if not os.path.exists(im_folder):
-        os.makedirs(im_folder)
 
     # bands for each mission
     if inputs["landsat_collection"] == "C01":
@@ -753,6 +782,9 @@ def retrieve_images(
                             apply_cloud_mask=apply_cloud_mask,
                         )
             except Exception as error:
+                logger.error(
+                    f"The download for satellite {satname} {im_meta.get('id','unknown')} failed due to \n {error}"
+                )
                 print(
                     f"The download for satellite {satname} {im_meta.get('id','unknown')} failed due to \n {error}"
                 )
@@ -787,10 +819,9 @@ def retrieve_images(
                             for key in metadict.keys():
                                 f.write("%s\t%s\n" % (key, metadict[key]))
                 except Exception as e:
-                    print(
-                        f"Could not save metadata for {im_meta.get('id','unknown')} that failed.\n{e}"
+                    logger.error(
+                        f"Could not save metasdata for {im_meta.get('id','unknown')} that failed.\n{e}"
                     )
-
     # once all images have been downloaded, load metadata from .txt files
     metadata = get_metadata(inputs)
     # save metadata dict
