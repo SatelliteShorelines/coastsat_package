@@ -79,8 +79,8 @@ bands_dict = {
 
 # test data
 satname = "L8"
-# image_id = "LANDSAT/LC08/C02/T2_TOA/LT08_137207_20140501" # corrupt image
-image_id = "LANDSAT/LC08/C02/T1_TOA/LC08_040037_20141219"
+image_id = "LANDSAT/LC08/C02/T2_TOA/LT08_137207_20140501"  # corrupt image
+# image_id = "LANDSAT/LC08/C02/T1_TOA/LC08_040037_20141219" # normal image
 image_ee = ee.Image(image_id)
 im_folder = (
     r"C:\development\doodleverse\coastsat_package\coastsat_package\data\l8_failure2"
