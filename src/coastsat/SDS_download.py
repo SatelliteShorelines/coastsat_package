@@ -145,6 +145,20 @@ def retry(func):
     return wrapper
 
 
+@retry
+def remove_dimensions_from_bands(image_ee):
+    # first delete dimensions key from dictionary
+    # otherwise the entire image is extracted (don't know why)
+    try:
+        im_bands = image_ee.getInfo()["bands"]
+        for j in range(len(im_bands)):
+            del im_bands[j]["dimensions"]
+        return im_bands
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        raise
+
+
 def get_image_quality(satname: str, im_meta: dict) -> str:
     """
     Get the image quality for a given satellite name and image metadata.
@@ -450,9 +464,7 @@ def retrieve_images(
 
                 # first delete dimensions key from dictionary
                 # otherwise the entire image is extracted (don't know why)
-                im_bands = image_ee.getInfo()["bands"]
-                for j in range(len(im_bands)):
-                    del im_bands[j]["dimensions"]
+                im_bands = remove_dimensions_from_bands(image_ee)
 
                 # =============================================================================================#
                 # Landsat 5 download
@@ -1166,6 +1178,7 @@ def get_s2cloudless(image_list: list, inputs: dict):
     return matched_cloud_images
 
 
+@retry
 def get_image_info(collection, satname, polygon, dates, **kwargs):
     """
     Reads info about EE images for the specified collection, satellite and dates
@@ -1513,7 +1526,7 @@ def filter_S2_collection(im_list):
         return im_list
     else:
         idx_max = np.argmax([np.sum(utm_zones == _) for _ in np.unique(utm_zones)])
-        utm_zone_selected =  np.unique(utm_zones)[idx_max]
+        utm_zone_selected = np.unique(utm_zones)[idx_max]
         # find the images that were acquired at the same time but have different utm zones
         idx_all = np.arange(0, len(im_list), 1)
         idx_covered = np.ones(len(im_list)).astype(bool)
