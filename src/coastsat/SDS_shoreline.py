@@ -334,6 +334,7 @@ def extract_shorelines(
                         settings,
                         date,
                         satname,
+                        im_ref_buffer,
                     )
                     # if the user decides to skip the image, continue and do not save the mapped shoreline
                     if skip_image:
@@ -877,7 +878,16 @@ def process_shoreline(contours, cloud_mask, im_nodata, georef, image_epsg, setti
 
 
 def show_detection(
-    im_ms, cloud_mask, im_labels, shoreline, image_epsg, georef, settings, date, satname
+    im_ms,
+    cloud_mask,
+    im_labels,
+    shoreline,
+    image_epsg,
+    georef,
+    settings,
+    date,
+    satname,
+    im_ref_buffer=None,
 ):
     """
     Shows the detected shoreline to the user for visual quality control.
@@ -998,8 +1008,18 @@ def show_detection(
     ax1.axis("off")
     ax1.set_title(sitename, fontweight="bold", fontsize=16)
 
+    # color map for the reference shoreline buffer
+    masked_cmap = plt.cm.get_cmap("Greys")
+    # masked_cmap.set_bad(color="gray", alpha=0)
+    # Create a masked array where False values are masked
+    masked_array = None
+    if im_ref_buffer is not None:
+        masked_array = np.ma.masked_where(im_ref_buffer == False, im_ref_buffer)
+
     # create image 2 (classification)
     ax2.imshow(im_class)
+    if masked_array is not None:
+        ax2.imshow(masked_array, cmap=masked_cmap, alpha=0.37)
     ax2.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=3)
     ax2.axis("off")
     orange_patch = mpatches.Patch(color=colours[0, :], label="sand")
@@ -1015,6 +1035,8 @@ def show_detection(
 
     # create image 3 (MNDWI)
     ax3.imshow(im_mwi, cmap="bwr")
+    if masked_array is not None:
+        ax3.imshow(masked_array, cmap=masked_cmap, alpha=0.37)
     ax3.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=3)
     ax3.axis("off")
     ax3.set_title(satname, fontweight="bold", fontsize=16)

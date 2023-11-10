@@ -818,6 +818,11 @@ def retrieve_images(
                         ) as f:
                             for key in metadict.keys():
                                 f.write("%s\t%s\n" % (key, metadict[key]))
+
+                        if im_fn.get("ms", "unknown") != "unknown":
+                            logger.info(
+                                f"Successfully downloaded image id {im_meta.get('id','unknown')} as {im_fn.get('ms')}"
+                            )
                 except Exception as e:
                     logger.error(
                         f"Could not save metasdata for {im_meta.get('id','unknown')} that failed.\n{e}"
@@ -1513,7 +1518,7 @@ def filter_S2_collection(im_list):
         return im_list
     else:
         idx_max = np.argmax([np.sum(utm_zones == _) for _ in np.unique(utm_zones)])
-        utm_zone_selected =  np.unique(utm_zones)[idx_max]
+        utm_zone_selected = np.unique(utm_zones)[idx_max]
         # find the images that were acquired at the same time but have different utm zones
         idx_all = np.arange(0, len(im_list), 1)
         idx_covered = np.ones(len(im_list)).astype(bool)
