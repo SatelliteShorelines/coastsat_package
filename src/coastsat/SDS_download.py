@@ -14,6 +14,7 @@ import pdb
 from typing import List, Dict, Union, Tuple
 import time
 from functools import wraps
+import traceback
 
 # earth engine module
 import ee
@@ -55,11 +56,11 @@ def setup_logger(folder, base_filename="download_report"):
 
     # Create a custom logger
     logger = logging.getLogger("satellite_download_logger")
-    logger.setLevel(logging.ERROR)  # Log errors and above
+    logger.setLevel(logging.INFO)  # Log errors and above
 
     # Create handlers
     file_handler = logging.FileHandler(log_filepath)
-    file_handler.setLevel(logging.ERROR)
+    file_handler.setLevel(logging.INFO)
 
     # Create formatters and add it to handlers
     log_format = logging.Formatter(
@@ -128,7 +129,7 @@ def retry(func):
             except ee.ee_exception.EEException as e:
                 try:
                     interpret_ee_exception(e)
-                except RequestSizeExceededError as request_limit_exceeded:
+                except RequestSizeExceededError:
                     # Handle request size exceeded error specifically
                     raise RequestSizeExceededError(
                         f"{image_id} download failed to download due request size exceeding maximum limit likely due to file corruption."
@@ -144,7 +145,7 @@ def retry(func):
 
 
 @retry
-def remove_dimensions_from_bands(image_ee):
+def remove_dimensions_from_bands(image_ee, **kwargs):
     # first delete dimensions key from dictionary
     # otherwise the entire image is extracted (don't know why)
     try:
@@ -153,8 +154,10 @@ def remove_dimensions_from_bands(image_ee):
             del im_bands[j]["dimensions"]
         return im_bands
     except Exception as e:
-        print(f"An error occurred: {e}")
-        raise
+        print(
+            f"An error occurred when attempting to edit bands for image {kwargs.get('image_id','')}: {e}"
+        )
+        raise e
 
 
 def get_image_quality(satname: str, im_meta: dict) -> str:
@@ -401,9 +404,6 @@ def retrieve_images(
     suffix = ".tif"
     count = 1
     num_satellites = len(im_dict_T1.keys())
-    # total allowed errors throught download process
-    MAX_ALLOWED_ERRORS = 10
-    error_counter = 0
     for satname in tqdm(
         im_dict_T1.keys(), desc=f"Downloading Imagery for {num_satellites} satellites"
     ):
@@ -413,8 +413,6 @@ def retrieve_images(
         # initialise variables and loop through images
         bands_id = bands_dict[satname]
         all_names = []  # list for detecting duplicates
-        # reset the error counter for each satellite
-        error_counter = 0
         # loop through each image
         for i in tqdm(
             range(len(im_dict_T1[satname])),
@@ -462,7 +460,10 @@ def retrieve_images(
 
                 # first delete dimensions key from dictionary
                 # otherwise the entire image is extracted (don't know why)
-                im_bands = remove_dimensions_from_bands(image_ee)
+                im_bands = remove_dimensions_from_bands(
+                    image_ee,
+                    image_id=im_meta["id"],
+                )
 
                 # =============================================================================================#
                 # Landsat 5 download
@@ -539,8 +540,8 @@ def retrieve_images(
                     )
 
                     # delete original downloads
-                    for _ in [fn_ms, fn_QA]:
-                        os.remove(_)
+                    for original_file in [fn_ms, fn_QA]:
+                        os.remove(original_file)
                     if save_jpg:
                         tif_paths = SDS_tools.get_filepath(inputs, satname)
                         SDS_preprocess.save_single_jpg(
@@ -675,6 +676,7 @@ def retrieve_images(
                             collection=inputs["landsat_collection"],
                             apply_cloud_mask=apply_cloud_mask,
                         )
+
                 # =============================================================================================#
                 # Sentinel-2 download
                 # =============================================================================================#
@@ -793,7 +795,7 @@ def retrieve_images(
                         )
             except Exception as error:
                 logger.error(
-                    f"The download for satellite {satname} {im_meta.get('id','unknown')} failed due to \n {error}"
+                    f"The download for satellite {satname} {im_meta.get('id','unknown')} failed due to \n {error} \n Traceback {traceback.format_exc()}"
                 )
                 print(
                     f"The download for satellite {satname} {im_meta.get('id','unknown')} failed due to \n {error}"
@@ -834,6 +836,7 @@ def retrieve_images(
                                 f"Successfully downloaded image id {im_meta.get('id','unknown')} as {im_fn.get('ms')}"
                             )
                 except Exception as e:
+                    print(traceback.format_exc())
                     logger.error(
                         f"Could not save metasdata for {im_meta.get('id','unknown')} that failed.\n{e}"
                     )
