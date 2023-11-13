@@ -14,7 +14,6 @@ import pdb
 from typing import List, Dict, Union, Tuple
 import time
 from functools import wraps
-import traceback
 
 # earth engine module
 import ee
@@ -29,7 +28,6 @@ from osgeo import gdal
 # additional modules
 from datetime import datetime, timedelta
 import pytz
-import pickle
 from skimage import morphology, transform
 from scipy import ndimage
 
@@ -121,7 +119,7 @@ def retry(func):
     def wrapper(*args, **kwargs):
         max_tries = 3
         image_id = kwargs.get(
-            "image_id", "Unknown"
+            "image_id", "Unknown image id"
         )  # Get image_id from kwargs or use 'Unknown'
         for i in range(max_tries):
             try:
@@ -1178,10 +1176,10 @@ def get_s2cloudless(image_list: list, inputs: dict):
     return matched_cloud_images
 
 
-@retry
+@retry  # Apply the retry decorator to the function
 def get_image_info(collection, satname, polygon, dates, **kwargs):
     """
-    Reads info about EE images for the specified collection, satellite and dates
+    Reads info about EE images for the specified collection, satellite, and dates
 
     KV WRL 2022
 
@@ -1201,25 +1199,18 @@ def get_image_info(collection, satname, polygon, dates, **kwargs):
     im_list: list of ee.Image objects
         list with the info for the images
     """
-    while True:
-        try:
-            # get info about images
-            ee_col = ee.ImageCollection(collection)
-            # Initialize the collection with filterBounds and filterDate
-            col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(
-                dates[0], dates[1]
-            )
-            # If "S2tile" key is in kwargs and its associated value is truthy (not an empty string, None, etc.),
-            # then apply an additional filter to the collection.
-            if kwargs.get("S2tile"):
-                col = col.filterMetadata(
-                    "MGRS_TILE", "equals", kwargs["S2tile"]
-                )  # 58GGP
-                print(f"Only keeping user-defined S2tile: {kwargs['S2tile']}")
-            im_list = col.getInfo().get("features")
-            break
-        except:
-            continue
+    # get info about images
+    ee_col = ee.ImageCollection(collection)
+    # Initialize the collection with filterBounds and filterDate
+    col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(
+        dates[0], dates[1]
+    )
+    # If "S2tile" key is in kwargs and its associated value is truthy (not an empty string, None, etc.),
+    # then apply an additional filter to the collection.
+    if kwargs.get("S2tile"):
+        col = col.filterMetadata("MGRS_TILE", "equals", kwargs["S2tile"])  # 58GGP
+        print(f"Only keeping user-defined S2tile: {kwargs['S2tile']}")
+    im_list = col.getInfo().get("features")
     # remove very cloudy images (>95% cloud cover)
     im_list = remove_cloudy_images(im_list, satname)
     return im_list
