@@ -1026,8 +1026,11 @@ def show_detection(
     white_patch = mpatches.Patch(color=colours[1, :], label="whitewater")
     blue_patch = mpatches.Patch(color=colours[2, :], label="water")
     black_line = mlines.Line2D([], [], color="k", linestyle="-", label="shoreline")
+    buffer_patch = mpatches.Patch(
+        color="grey", alpha=0.37, label="Reference shoreline buffer"
+    )
     ax2.legend(
-        handles=[orange_patch, white_patch, blue_patch, black_line],
+        handles=[orange_patch, white_patch, blue_patch, black_line, buffer_patch],
         bbox_to_anchor=(1, 0.5),
         fontsize=10,
     )
