@@ -481,9 +481,11 @@ def retrieve_images(
 
                 # first delete dimensions key from dictionary
                 # otherwise the entire image is extracted (don't know why)
+
                 im_bands = remove_dimensions_from_bands(
                     image_ee, image_id=im_meta["id"], logger=logger
                 )
+  
 
                 # =============================================================================================#
                 # Landsat 5 download
@@ -499,6 +501,7 @@ def retrieve_images(
                     ]
                     # adjust polygon to match image coordinates so that there is no resampling
                     proj = image_ee.select("B1").projection()
+
                     ee_region = adjust_polygon(
                         inputs["polygon"], proj, image_id=im_meta["id"], logger=logger
                     )
@@ -611,6 +614,7 @@ def retrieve_images(
                         image_id=im_meta["id"],
                         logger=logger,
                     )
+
                     ee_region_pan = adjust_polygon(
                         inputs["polygon"],
                         proj_pan,
@@ -619,6 +623,7 @@ def retrieve_images(
                     )
 
                     # download both ms and pan bands from EE
+
                     fn_ms, fn_QA = download_tif(
                         image_ee,
                         ee_region_ms,
@@ -628,6 +633,7 @@ def retrieve_images(
                         image_id=im_meta["id"],
                         logger=logger,
                     )
+
                     fn_pan = download_tif(
                         image_ee,
                         ee_region_pan,
@@ -846,11 +852,11 @@ def retrieve_images(
                             apply_cloud_mask=apply_cloud_mask,
                         )
             except Exception as error:
-                logger.error(
-                    f"The download for satellite {satname} {im_meta.get('id','unknown')} failed due to \n {error} \n Traceback {traceback.format_exc()}"
-                )
                 print(
                     f"\nThe download for satellite {satname} image '{im_meta.get('id','unknown')}' failed due to {type(error).__name__ }"
+                )
+                logger.error(
+                    f"The download for satellite {satname} {im_meta.get('id','unknown')} failed due to \n {error} \n Traceback {traceback.format_exc()}"
                 )
                 continue
             finally:
