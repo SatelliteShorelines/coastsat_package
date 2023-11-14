@@ -103,60 +103,48 @@ def interpret_ee_exception(e):
         raise
 
 
-def sleep_or_exception(file_id: str, i: int, max_tries: int, e: Exception, **kwargs):
-    image_id = kwargs.get("image_id", "")
-    exception_type = type(e).__name__  # This gets the name of the exception class
-    # Handle connection lost error specifically and attempt to retry
-    print(
-        f"Download Attempt {i+1} for image {image_id} failed due to a {exception_type} error."
-    )
-    if kwargs.get("logger"):
-        logger = kwargs.get("logger")
-        logger.warning(f"\n  Attempt {i+1} failed: {str(e)}")
-    if i + 1 == max_tries:
-        raise TooManyRequests(
-            f"Failed to download after {max_tries} attempts : {file_id}"
-        )
-    else:
-        time.sleep(1)
-
-
-# decorator to try download function again and wait 1 second in between
 def retry(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         max_tries = 3
-        image_id = kwargs.get(
-            "image_id", "Unknown image id"
-        )  # Get image_id from kwargs or use 'Unknown'
+        # Get image_id from kwargs or use 'Unknown'
+        image_id = kwargs.get("image_id", "Unknown image id")
+        logger = kwargs.get("logger", None)
+        # attempt to download the image up to max_tries times
         for i in range(max_tries):
             try:
                 return func(*args, **kwargs)
             # attempt to handle ee exceptions first then handle other exceptions
             except ee.ee_exception.EEException as e:
-                try:
-                    interpret_ee_exception(e)
-                except RequestSizeExceededError:
-                    # Handle request size exceeded error specifically
+                interpret_ee_exception(e)
+            except Exception as e:
+                print(
+                    f"Download Attempt {i+1} for image {image_id} failed due to a {type(e).__name__} error."
+                )
+                if logger:
+                    logger.warning(f"\nAttempt {i+1} failed: {str(e)}")
+                # if request size exceeded error then raise a custom error
+                if isinstance(e, RequestSizeExceededError):
+                    print(e)
                     raise RequestSizeExceededError(
                         f"{image_id} download failed to download due request size exceeding maximum limit likely due to file corruption."
                     )
-                except ConnectionLostError as connection_error:
-                    sleep_or_exception(
-                        image_id,
-                        i,
-                        max_tries,
-                        connection_error,
-                        logger=kwargs.get("logger"),
+                # certain exceptions should not be retried
+                if isinstance(e, (KeyboardInterrupt, SystemExit, TooManyRequests)):
+                    # Re-raise the exceptions that shouldn't be retried or are already handled specifically
+                    raise
+                # attempt to retry other exceptions
+                if i + 1 < max_tries:
+                    print(f"Retrying due to {type(e).__name__}: {e}")
+                    time.sleep(1)  # Wait 1 second before retrying
+                else:
+                    # Re-raise the last exception if max retries have been exceeded )(i.e. no more retries)
+                    print(
+                        f"Max retries exceeded for {func.__name__} due to {type(e).__name__}"
                     )
-                except Exception as e:
-                    sleep_or_exception(
-                        image_id, i, max_tries, e, logger=kwargs.get("logger")
+                    raise TooManyRequests(
+                        f"Failed to process {image_id} after {max_tries} attempts due to: {e}"
                     )
-            except Exception as e:
-                sleep_or_exception(
-                    image_id, i, max_tries, e, logger=kwargs.get("logger")
-                )
 
     return wrapper
 
@@ -485,7 +473,6 @@ def retrieve_images(
                 im_bands = remove_dimensions_from_bands(
                     image_ee, image_id=im_meta["id"], logger=logger
                 )
-  
 
                 # =============================================================================================#
                 # Landsat 5 download
@@ -614,7 +601,6 @@ def retrieve_images(
                         image_id=im_meta["id"],
                         logger=logger,
                     )
-
                     ee_region_pan = adjust_polygon(
                         inputs["polygon"],
                         proj_pan,
@@ -623,7 +609,6 @@ def retrieve_images(
                     )
 
                     # download both ms and pan bands from EE
-
                     fn_ms, fn_QA = download_tif(
                         image_ee,
                         ee_region_ms,
@@ -633,7 +618,6 @@ def retrieve_images(
                         image_id=im_meta["id"],
                         logger=logger,
                     )
-
                     fn_pan = download_tif(
                         image_ee,
                         ee_region_pan,
@@ -654,7 +638,6 @@ def retrieve_images(
                             + key
                             + suffix
                         )
-
                     # if multiple images taken at the same date add 'dupX' to the name (duplicate number X)
                     im_fn = handle_duplicate_image_names(
                         all_names,
@@ -1211,36 +1194,41 @@ def get_s2cloudless(image_list: list, inputs: dict):
     List[Union[Dict, List]]: A list where each element is either a dictionary containing metadata of a matched
     s2cloudless image or an empty list if no match is found.
     """
-    # Convert string dates to datetime objects
-    dates = [datetime.strptime(date, "%Y-%m-%d") for date in inputs["dates"]]
-    polygon = inputs["polygon"]
-    collection = "COPERNICUS/S2_CLOUD_PROBABILITY"
-    # get s2cloudless collection
-    s2cloudless_col = (
-        ee.ImageCollection(collection)
-        .filterBounds(ee.Geometry.Polygon(polygon))
-        .filterDate(dates[0], dates[1])
-    )
-    cloud_images_list = s2cloudless_col.getInfo().get("features", [])
-    # Extract image IDs from the s2cloudless collection
-    cloud_indices = [image["properties"]["system:index"] for image in cloud_images_list]
-    # match with S2 images
-    matched_cloud_images = []
-    for image_meta in image_list:
-        index = image_meta["properties"]["system:index"]
+    try:
+        # Convert string dates to datetime objects
+        dates = [datetime.strptime(date, "%Y-%m-%d") for date in inputs["dates"]]
+        polygon = inputs["polygon"]
+        collection = "COPERNICUS/S2_CLOUD_PROBABILITY"
+        # get s2cloudless collection
+        s2cloudless_col = (
+            ee.ImageCollection(collection)
+            .filterBounds(ee.Geometry.Polygon(polygon))
+            .filterDate(dates[0], dates[1])
+        )
+        cloud_images_list = s2cloudless_col.getInfo().get("features", [])
+        # Extract image IDs from the s2cloudless collection
+        cloud_indices = [
+            image["properties"]["system:index"] for image in cloud_images_list
+        ]
+        # match with S2 images
+        matched_cloud_images = []
+        for image_meta in image_list:
+            index = image_meta["properties"]["system:index"]
 
-        if index in cloud_indices:
-            matched_index = cloud_indices.index(index)
-            matched_cloud_images.append(cloud_images_list[matched_index])
-        else:  # append an empty list if no match is found
-            matched_cloud_images.append([])
-    # try:
-    #     matched_index = cloud_indices.index(index)
-    #     matched_cloud_images.append(cloud_images_list[matched_index])
-    # except ValueError:  # handle the case where index is not in cloud_indices
-    #     matched_cloud_images.append([])
+            if index in cloud_indices:
+                matched_index = cloud_indices.index(index)
+                matched_cloud_images.append(cloud_images_list[matched_index])
+            else:  # append an empty list if no match is found
+                matched_cloud_images.append([])
+        # try:
+        #     matched_index = cloud_indices.index(index)
+        #     matched_cloud_images.append(cloud_images_list[matched_index])
+        # except ValueError:  # handle the case where index is not in cloud_indices
+        #     matched_cloud_images.append([])
 
-    return matched_cloud_images
+        return matched_cloud_images
+    except Exception as e:
+        raise e
 
 
 @retry  # Apply the retry decorator to the function
@@ -1266,21 +1254,24 @@ def get_image_info(collection, satname, polygon, dates, **kwargs):
     im_list: list of ee.Image objects
         list with the info for the images
     """
-    # get info about images
-    ee_col = ee.ImageCollection(collection)
-    # Initialize the collection with filterBounds and filterDate
-    col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(
-        dates[0], dates[1]
-    )
-    # If "S2tile" key is in kwargs and its associated value is truthy (not an empty string, None, etc.),
-    # then apply an additional filter to the collection.
-    if kwargs.get("S2tile"):
-        col = col.filterMetadata("MGRS_TILE", "equals", kwargs["S2tile"])  # 58GGP
-        print(f"Only keeping user-defined S2tile: {kwargs['S2tile']}")
-    im_list = col.getInfo().get("features")
-    # remove very cloudy images (>95% cloud cover)
-    im_list = remove_cloudy_images(im_list, satname)
-    return im_list
+    try:
+        # get info about images
+        ee_col = ee.ImageCollection(collection)
+        # Initialize the collection with filterBounds and filterDate
+        col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(
+            dates[0], dates[1]
+        )
+        # If "S2tile" key is in kwargs and its associated value is truthy (not an empty string, None, etc.),
+        # then apply an additional filter to the collection.
+        if kwargs.get("S2tile"):
+            col = col.filterMetadata("MGRS_TILE", "equals", kwargs["S2tile"])  # 58GGP
+            print(f"Only keeping user-defined S2tile: {kwargs['S2tile']}")
+        im_list = col.getInfo().get("features")
+        # remove very cloudy images (>95% cloud cover)
+        im_list = remove_cloudy_images(im_list, satname)
+        return im_list
+    except Exception as e:
+        raise e
 
 
 def remove_cloudy_images(im_list, satname, prc_cloud_cover=95):
@@ -1344,23 +1335,28 @@ def adjust_polygon(polygon, proj, **kwargs):
     ee_region: ee
         updated list of images
     """
-    # adjust polygon to match image coordinates so that there is no resampling
-    polygon_ee = ee.Geometry.Polygon(polygon)
-    # convert polygon to image coordinates
-    polygon_coords = np.array(
-        ee.List(polygon_ee.transform(proj, 1).coordinates().get(0)).getInfo()
-    )
-    # make it a rectangle
-    xmin = np.min(polygon_coords[:, 0])
-    ymin = np.min(polygon_coords[:, 1])
-    xmax = np.max(polygon_coords[:, 0])
-    ymax = np.max(polygon_coords[:, 1])
-    # round to the closest pixels
-    rect = [np.floor(xmin), np.floor(ymin), np.ceil(xmax), np.ceil(ymax)]
-    # convert back to epsg 4326
-    ee_region = ee.Geometry.Rectangle(rect, proj, True, False).transform("EPSG:4326")
+    try:
+        # adjust polygon to match image coordinates so that there is no resampling
+        polygon_ee = ee.Geometry.Polygon(polygon)
+        # convert polygon to image coordinates
+        polygon_coords = np.array(
+            ee.List(polygon_ee.transform(proj, 1).coordinates().get(0)).getInfo()
+        )
+        # make it a rectangle
+        xmin = np.min(polygon_coords[:, 0])
+        ymin = np.min(polygon_coords[:, 1])
+        xmax = np.max(polygon_coords[:, 0])
+        ymax = np.max(polygon_coords[:, 1])
+        # round to the closest pixels
+        rect = [np.floor(xmin), np.floor(ymin), np.ceil(xmax), np.ceil(ymax)]
+        # convert back to epsg 4326
+        ee_region = ee.Geometry.Rectangle(rect, proj, True, False).transform(
+            "EPSG:4326"
+        )
 
-    return ee_region
+        return ee_region
+    except Exception as e:
+        raise e
 
 
 # decorator to try the download up to 3 times
@@ -1407,78 +1403,84 @@ def download_tif(
         )
     # for the newer versions of ee
     else:
-        # crop and download
-        download_id = ee.data.getDownloadId(
-            {
-                "image": image,
-                "region": polygon,
-                "bands": bands,
-                "filePerBand": True,
-                "name": "image",
-            }
-        )
-        response = requests.get(ee.data.makeDownloadUrl(download_id))
-        fp_zip = os.path.join(filepath, "temp.zip")
-        with open(fp_zip, "wb") as fd:
-            fd.write(response.content)
-        # unzip the individual bands
-        with zipfile.ZipFile(fp_zip) as local_zipfile:
-            for fn in local_zipfile.namelist():
-                local_zipfile.extract(fn, filepath)
-            fn_all = [os.path.join(filepath, _) for _ in local_zipfile.namelist()]
-        os.remove(fp_zip)
-        # now process the individual bands:
-        # - for Landsat
-        if satname in ["L5", "L7", "L8", "L9"]:
-            # if there is only one band, it's the panchromatic
-            if len(fn_all) == 1:
-                # return the filename of the .tif
-                return fn_all[0]
-            # otherwise there are multiple multispectral bands so we have to merge them into one .tif
-            else:
-                # select all ms bands except the QA band (which is processed separately)
-                fn_tifs = [_ for _ in fn_all if not "QA" in _]
-                filename = "ms_bands.tif"
-                # build a VRT and merge the bands (works the same with pan band)
-                outds = gdal.BuildVRT(
-                    os.path.join(filepath, "temp.vrt"), fn_tifs, separate=True
-                )
-                outds = gdal.Translate(os.path.join(filepath, filename), outds)
-                # remove temporary files
-                os.remove(os.path.join(filepath, "temp.vrt"))
-                for _ in fn_tifs:
-                    os.remove(_)
-                if os.path.exists(os.path.join(filepath, filename + ".aux.xml")):
-                    os.remove(os.path.join(filepath, filename + ".aux.xml"))
-                # return file names (ms and QA bands separately)
-                fn_image = os.path.join(filepath, filename)
-                fn_QA = [_ for _ in fn_all if "QA" in _][0]
-                return fn_image, fn_QA
-        # - for Sentinel-2
-        if satname in ["S2"]:
-            # if there is only one band, it's either the SWIR1 or QA60
-            if len(fn_all) == 1:
-                # return the filename of the .tif
-                return fn_all[0]
-            # otherwise there are multiple multispectral bands so we have to merge them into one .tif
-            else:
-                # select all ms bands except the QA band (which is processed separately)
-                fn_tifs = fn_all
-                filename = "ms_bands.tif"
-                # build a VRT and merge the bands (works the same with pan band)
-                outds = gdal.BuildVRT(
-                    os.path.join(filepath, "temp.vrt"), fn_tifs, separate=True
-                )
-                outds = gdal.Translate(os.path.join(filepath, filename), outds)
-                # remove temporary files
-                os.remove(os.path.join(filepath, "temp.vrt"))
-                for _ in fn_tifs:
-                    os.remove(_)
-                if os.path.exists(os.path.join(filepath, filename + ".aux.xml")):
-                    os.remove(os.path.join(filepath, filename + ".aux.xml"))
-                # return filename of the merge .tif file
-                fn_image = os.path.join(filepath, filename)
-                return fn_image
+        try:
+            # crop and download
+            download_id = ee.data.getDownloadId(
+                {
+                    "image": image,
+                    "region": polygon,
+                    "bands": bands,
+                    "filePerBand": True,
+                    "name": "image",
+                }
+            )
+            response = requests.get(
+                ee.data.makeDownloadUrl(download_id),
+                timeout=(30, 30),  # 30 seconds to connect, 30 seconds to read
+            )
+            fp_zip = os.path.join(filepath, "temp.zip")
+            with open(fp_zip, "wb") as fd:
+                fd.write(response.content)
+            # unzip the individual bands
+            with zipfile.ZipFile(fp_zip) as local_zipfile:
+                for fn in local_zipfile.namelist():
+                    local_zipfile.extract(fn, filepath)
+                fn_all = [os.path.join(filepath, _) for _ in local_zipfile.namelist()]
+            os.remove(fp_zip)
+            # now process the individual bands:
+            # - for Landsat
+            if satname in ["L5", "L7", "L8", "L9"]:
+                # if there is only one band, it's the panchromatic
+                if len(fn_all) == 1:
+                    # return the filename of the .tif
+                    return fn_all[0]
+                # otherwise there are multiple multispectral bands so we have to merge them into one .tif
+                else:
+                    # select all ms bands except the QA band (which is processed separately)
+                    fn_tifs = [_ for _ in fn_all if not "QA" in _]
+                    filename = "ms_bands.tif"
+                    # build a VRT and merge the bands (works the same with pan band)
+                    outds = gdal.BuildVRT(
+                        os.path.join(filepath, "temp.vrt"), fn_tifs, separate=True
+                    )
+                    outds = gdal.Translate(os.path.join(filepath, filename), outds)
+                    # remove temporary files
+                    os.remove(os.path.join(filepath, "temp.vrt"))
+                    for _ in fn_tifs:
+                        os.remove(_)
+                    if os.path.exists(os.path.join(filepath, filename + ".aux.xml")):
+                        os.remove(os.path.join(filepath, filename + ".aux.xml"))
+                    # return file names (ms and QA bands separately)
+                    fn_image = os.path.join(filepath, filename)
+                    fn_QA = [_ for _ in fn_all if "QA" in _][0]
+                    return fn_image, fn_QA
+            # - for Sentinel-2
+            if satname in ["S2"]:
+                # if there is only one band, it's either the SWIR1 or QA60
+                if len(fn_all) == 1:
+                    # return the filename of the .tif
+                    return fn_all[0]
+                # otherwise there are multiple multispectral bands so we have to merge them into one .tif
+                else:
+                    # select all ms bands except the QA band (which is processed separately)
+                    fn_tifs = fn_all
+                    filename = "ms_bands.tif"
+                    # build a VRT and merge the bands (works the same with pan band)
+                    outds = gdal.BuildVRT(
+                        os.path.join(filepath, "temp.vrt"), fn_tifs, separate=True
+                    )
+                    outds = gdal.Translate(os.path.join(filepath, filename), outds)
+                    # remove temporary files
+                    os.remove(os.path.join(filepath, "temp.vrt"))
+                    for _ in fn_tifs:
+                        os.remove(_)
+                    if os.path.exists(os.path.join(filepath, filename + ".aux.xml")):
+                        os.remove(os.path.join(filepath, filename + ".aux.xml"))
+                    # return filename of the merge .tif file
+                    fn_image = os.path.join(filepath, filename)
+                    return fn_image
+        except Exception as e:
+            raise e
 
 
 def warp_image_to_target(
