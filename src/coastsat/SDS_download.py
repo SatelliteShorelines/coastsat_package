@@ -103,9 +103,16 @@ def interpret_ee_exception(e):
         raise
 
 
-def sleep_or_exception(file_id: str, i: int, max_tries: int, e: Exception):
+def sleep_or_exception(file_id: str, i: int, max_tries: int, e: Exception, **kwargs):
+    image_id = kwargs.get("image_id", "")
+    exception_type = type(e).__name__  # This gets the name of the exception class
     # Handle connection lost error specifically and attempt to retry
-    print(f"Attempt {i+1} failed: {str(e)}")
+    print(
+        f"Download Attempt {i+1} for image {image_id} failed due to a {exception_type} error."
+    )
+    if kwargs.get("logger"):
+        logger = kwargs.get("logger")
+        logger.warning(f"\n  Attempt {i+1} failed: {str(e)}")
     if i + 1 == max_tries:
         raise TooManyRequests(
             f"Failed to download after {max_tries} attempts : {file_id}"
@@ -135,11 +142,21 @@ def retry(func):
                         f"{image_id} download failed to download due request size exceeding maximum limit likely due to file corruption."
                     )
                 except ConnectionLostError as connection_error:
-                    sleep_or_exception(image_id, i, max_tries, connection_error)
+                    sleep_or_exception(
+                        image_id,
+                        i,
+                        max_tries,
+                        connection_error,
+                        logger=kwargs.get("logger"),
+                    )
                 except Exception as e:
-                    sleep_or_exception(image_id, i, max_tries, e)
+                    sleep_or_exception(
+                        image_id, i, max_tries, e, logger=kwargs.get("logger")
+                    )
             except Exception as e:
-                sleep_or_exception(image_id, i, max_tries, e)
+                sleep_or_exception(
+                    image_id, i, max_tries, e, logger=kwargs.get("logger")
+                )
 
     return wrapper
 
@@ -155,8 +172,13 @@ def remove_dimensions_from_bands(image_ee, **kwargs):
         return im_bands
     except Exception as e:
         print(
-            f"An error occurred when attempting to edit bands for image {kwargs.get('image_id','')}: {e}"
+            f"A connection error occurred while getting bands for {kwargs.get('image_id','')}"
         )
+        if kwargs.get("logger"):
+            logger = kwargs.get("logger")
+            logger.error(
+                f"Error load bands for image {kwargs.get('image_id','')} skipping download.\n{e}"
+            )
         raise e
 
 
@@ -390,13 +412,12 @@ def retrieve_images(
             "Landsat collection %s does not exist, " % inputs["landsat_collection"]
             + "choose C01 or C02."
         )
-    qa_band_S2 = "QA60"
     bands_dict = {
         "L5": ["B1", "B2", "B3", "B4", "B5", qa_band_Landsat],
         "L7": ["B1", "B2", "B3", "B4", "B5", qa_band_Landsat],
         "L8": ["B2", "B3", "B4", "B5", "B6", qa_band_Landsat],
         "L9": ["B2", "B3", "B4", "B5", "B6", qa_band_Landsat],
-        "S2": ["B2", "B3", "B4", "B8", "s2cloudless", "B11", qa_band_S2],
+        "S2": ["B2", "B3", "B4", "B8", "s2cloudless", "B11", "QA60"],
     }
 
     # main loop to download the images for each satellite mission
@@ -461,8 +482,7 @@ def retrieve_images(
                 # first delete dimensions key from dictionary
                 # otherwise the entire image is extracted (don't know why)
                 im_bands = remove_dimensions_from_bands(
-                    image_ee,
-                    image_id=im_meta["id"],
+                    image_ee, image_id=im_meta["id"], logger=logger
                 )
 
                 # =============================================================================================#
@@ -479,7 +499,9 @@ def retrieve_images(
                     ]
                     # adjust polygon to match image coordinates so that there is no resampling
                     proj = image_ee.select("B1").projection()
-                    ee_region = adjust_polygon(inputs["polygon"], proj)
+                    ee_region = adjust_polygon(
+                        inputs["polygon"], proj, image_id=im_meta["id"], logger=logger
+                    )
                     # download .tif from EE (one file with ms bands and one file with QA band)
                     fn_ms, fn_QA = download_tif(
                         image_ee,
@@ -488,6 +510,7 @@ def retrieve_images(
                         fp_ms,
                         satname,
                         image_id=im_meta["id"],
+                        logger=logger,
                     )
                     # create filename for image
                     for key in bands.keys():
@@ -582,8 +605,18 @@ def retrieve_images(
                     # adjust polygon for both ms and pan bands
                     proj_ms = image_ee.select("B1").projection()
                     proj_pan = image_ee.select("B8").projection()
-                    ee_region_ms = adjust_polygon(inputs["polygon"], proj_ms)
-                    ee_region_pan = adjust_polygon(inputs["polygon"], proj_pan)
+                    ee_region_ms = adjust_polygon(
+                        inputs["polygon"],
+                        proj_ms,
+                        image_id=im_meta["id"],
+                        logger=logger,
+                    )
+                    ee_region_pan = adjust_polygon(
+                        inputs["polygon"],
+                        proj_pan,
+                        image_id=im_meta["id"],
+                        logger=logger,
+                    )
 
                     # download both ms and pan bands from EE
                     fn_ms, fn_QA = download_tif(
@@ -593,6 +626,7 @@ def retrieve_images(
                         fp_ms,
                         satname,
                         image_id=im_meta["id"],
+                        logger=logger,
                     )
                     fn_pan = download_tif(
                         image_ee,
@@ -695,9 +729,24 @@ def retrieve_images(
                     proj_ms = image_ee.select("B1").projection()
                     proj_swir = image_ee.select("B11").projection()
                     proj_mask = image_ee.select("QA60").projection()
-                    ee_region_ms = adjust_polygon(inputs["polygon"], proj_ms)
-                    ee_region_swir = adjust_polygon(inputs["polygon"], proj_swir)
-                    ee_region_mask = adjust_polygon(inputs["polygon"], proj_mask)
+                    ee_region_ms = adjust_polygon(
+                        inputs["polygon"],
+                        proj_ms,
+                        image_id=im_meta["id"],
+                        logger=logger,
+                    )
+                    ee_region_swir = adjust_polygon(
+                        inputs["polygon"],
+                        proj_swir,
+                        image_id=im_meta["id"],
+                        logger=logger,
+                    )
+                    ee_region_mask = adjust_polygon(
+                        inputs["polygon"],
+                        proj_mask,
+                        image_id=im_meta["id"],
+                        logger=logger,
+                    )
                     # download the ms, swir and QA bands from EE
                     fn_ms = download_tif(
                         image_ee,
@@ -706,6 +755,7 @@ def retrieve_images(
                         fp_ms,
                         satname,
                         image_id=im_meta["id"],
+                        logger=logger,
                     )
                     fn_swir = download_tif(
                         image_ee,
@@ -714,6 +764,7 @@ def retrieve_images(
                         fp_swir,
                         satname,
                         image_id=im_meta["id"],
+                        logger=logger,
                     )
                     fn_QA = download_tif(
                         image_ee,
@@ -722,6 +773,7 @@ def retrieve_images(
                         fp_mask,
                         satname,
                         image_id=im_meta["id"],
+                        logger=logger,
                     )
 
                     # create filename for the three images (ms, swir and mask)
@@ -798,7 +850,7 @@ def retrieve_images(
                     f"The download for satellite {satname} {im_meta.get('id','unknown')} failed due to \n {error} \n Traceback {traceback.format_exc()}"
                 )
                 print(
-                    f"The download for satellite {satname} {im_meta.get('id','unknown')} failed due to \n {error}"
+                    f"\nThe download for satellite {satname} image '{im_meta.get('id','unknown')}' failed due to {type(error).__name__ }"
                 )
                 continue
             finally:
@@ -836,10 +888,11 @@ def retrieve_images(
                                 f"Successfully downloaded image id {im_meta.get('id','unknown')} as {im_fn.get('ms')}"
                             )
                 except Exception as e:
-                    print(traceback.format_exc())
+                    # print(traceback.format_exc())
                     logger.error(
                         f"Could not save metasdata for {im_meta.get('id','unknown')} that failed.\n{e}"
                     )
+                    continue
     # once all images have been downloaded, load metadata from .txt files
     metadata = get_metadata(inputs)
     # save metadata dict
@@ -1260,7 +1313,8 @@ def remove_cloudy_images(im_list, satname, prc_cloud_cover=95):
     return im_list_upt
 
 
-def adjust_polygon(polygon, proj):
+@retry
+def adjust_polygon(polygon, proj, **kwargs):
     """
     Adjust polygon of ROI to fit exactly with the pixels of the underlying tile
 
