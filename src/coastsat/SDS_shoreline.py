@@ -1009,7 +1009,7 @@ def show_detection(
     ax1.set_title(sitename, fontweight="bold", fontsize=16)
 
     # color map for the reference shoreline buffer
-    masked_cmap = plt.cm.get_cmap("Greys")
+    masked_cmap = plt.cm.get_cmap("PiYG")
     # masked_cmap.set_bad(color="gray", alpha=0)
     # Create a masked array where False values are masked
     masked_array = None
@@ -1019,7 +1019,7 @@ def show_detection(
     # create image 2 (classification)
     ax2.imshow(im_class)
     if masked_array is not None:
-        ax2.imshow(masked_array, cmap=masked_cmap, alpha=0.45)
+        ax2.imshow(masked_array, cmap=masked_cmap, alpha=0.60)
     ax2.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=3)
     ax2.axis("off")
     orange_patch = mpatches.Patch(color=colours[0, :], label="sand")
@@ -1027,7 +1027,7 @@ def show_detection(
     blue_patch = mpatches.Patch(color=colours[2, :], label="water")
     black_line = mlines.Line2D([], [], color="k", linestyle="-", label="shoreline")
     buffer_patch = mpatches.Patch(
-        color="grey", alpha=0.45, label="Reference shoreline buffer"
+        color="#800000", alpha=0.80, label="Reference shoreline buffer"
     )
     ax2.legend(
         handles=[orange_patch, white_patch, blue_patch, black_line, buffer_patch],
@@ -1039,7 +1039,7 @@ def show_detection(
     # create image 3 (MNDWI)
     ax3.imshow(im_mwi, cmap="bwr")
     if masked_array is not None:
-        ax3.imshow(masked_array, cmap=masked_cmap, alpha=0.37)
+        ax3.imshow(masked_array, cmap=masked_cmap, alpha=0.60)
     ax3.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=3)
     ax3.axis("off")
     ax3.set_title(satname, fontweight="bold", fontsize=16)
