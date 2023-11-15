@@ -1019,7 +1019,7 @@ def show_detection(
     # create image 2 (classification)
     ax2.imshow(im_class)
     if masked_array is not None:
-        ax2.imshow(masked_array, cmap=masked_cmap, alpha=0.37)
+        ax2.imshow(masked_array, cmap=masked_cmap, alpha=0.45)
     ax2.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=3)
     ax2.axis("off")
     orange_patch = mpatches.Patch(color=colours[0, :], label="sand")
@@ -1027,7 +1027,7 @@ def show_detection(
     blue_patch = mpatches.Patch(color=colours[2, :], label="water")
     black_line = mlines.Line2D([], [], color="k", linestyle="-", label="shoreline")
     buffer_patch = mpatches.Patch(
-        color="grey", alpha=0.37, label="Reference shoreline buffer"
+        color="grey", alpha=0.45, label="Reference shoreline buffer"
     )
     ax2.legend(
         handles=[orange_patch, white_patch, blue_patch, black_line, buffer_patch],
