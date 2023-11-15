@@ -424,11 +424,6 @@ def retrieve_images(
         bands_id = bands_dict[satname]
         all_names = []  # list for detecting duplicates
         # loop through each image
-        # for i in tqdm(
-        #     range(len(im_dict_T1[satname])),
-        #     desc=f"Downloading Imagery for {satname}",
-        #     leave=True,
-        # ):
         pbar = tqdm(
             range(len(im_dict_T1[satname])),
             desc=f"Downloading Imagery for {satname}",
@@ -631,7 +626,8 @@ def retrieve_images(
 
                     # download both ms and pan bands from EE
                     pbar.set_description_str(
-                        desc=f"{satname}: Downloading tif for {i} image ", refresh=True
+                        desc=f"{satname}: Downloading tif for {i}th image ",
+                        refresh=True,
                     )
                     fn_ms, fn_QA = download_tif(
                         image_ee,
@@ -772,7 +768,8 @@ def retrieve_images(
                     )
                     # download the ms, swir and QA bands from EE
                     pbar.set_description_str(
-                        desc=f"{satname}: Downloading tif for {i} image ", refresh=True
+                        desc=f"{satname}: Downloading tif for {i}th image ",
+                        refresh=True,
                     )
                     fn_ms = download_tif(
                         image_ee,
