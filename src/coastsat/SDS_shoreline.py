@@ -117,14 +117,16 @@ def extract_shorelines(
         "extract_shorelines_report",
         log_format="%(levelname)s - %(message)s",
     )
-    logger.info(f"Please read the following information carefully:\n\n")
+    logger.info(f"Please read the following information carefully:\n")
     logger.info(
         "find_wl_contours2: A method for extracting shorelines that uses the sand water interface to refine the threshold that's used to detect shorelines .\n  - This is the default method used when there are enough sand pixels within the reference shoreline buffer.\n"
     )
     logger.info(
         "find_wl_contours1: A method for extracting shorelines that uses a global threshold, instead of the land water interface.\n  - This is only used when not enough sand pixels are detected within the reference shoreline buffer.\n"
     )
-
+    logger.info(
+        "---------------------------------------------------------------------------------------------------------------------"
+    )
     # initialise output structure
     output = dict([])
     # create a subfolder to store the .jpg images showing the detection
