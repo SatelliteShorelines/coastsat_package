@@ -117,11 +117,12 @@ def extract_shorelines(
         "extract_shorelines_report",
         log_format="%(levelname)s - %(message)s",
     )
+    logger.info(f"Please read the following information carefully:\n\n")
     logger.info(
-        "find_wl_contours2: A method for extracting shorelines that uses the sand water interface to refine the threshold. \nThis is the default method used when there are enough sand pixels within the reference shoreline buffer."
+        "find_wl_contours2: A method for extracting shorelines that uses the sand water interface to refine the threshold that's used to detect shorelines .\n  - This is the default method used when there are enough sand pixels within the reference shoreline buffer.\n"
     )
     logger.info(
-        "find_wl_contours1: A method for extracting shorelines that uses a global threshold, instead of the land water interface.\n This is only used when not enough sand pixels are detected within the reference shoreline buffer."
+        "find_wl_contours1: A method for extracting shorelines that uses a global threshold, instead of the land water interface.\n  - This is only used when not enough sand pixels are detected within the reference shoreline buffer.\n"
     )
 
     # initialise output structure
@@ -238,7 +239,7 @@ def extract_shorelines(
 
             if cloud_cover_combined > 0.99:  # if 99% of cloudy pixels in image skip
                 logger.error(
-                    f"Skipping {satname} {shoreline_date} due to cloud cover & no data exceeding maximum percentage allowed: {cloud_cover_combined:.2%} > 99%\n\n"
+                    f"Skipping {satname} {shoreline_date} due to cloud & no data pixels exceeding the maximum percentage allowed: {cloud_cover_combined:.2%} > 99%\n\n"
                 )
                 continue
 
@@ -253,7 +254,7 @@ def extract_shorelines(
             # skip image if cloud cover is above user-defined threshold
             if cloud_cover > settings["cloud_thresh"]:
                 logger.error(
-                    f"Skipping {satname} {shoreline_date} due to cloud cover: {cloud_cover:.2%} > {settings['cloud_thresh']:.2%}.\n\n"
+                    f"Skipping {satname} {shoreline_date} due to cloud cover percentage exceeding cloud threshold: {cloud_cover:.2%} > {settings['cloud_thresh']:.2%}.\n\n"
                 )
                 continue
             else:
@@ -865,8 +866,12 @@ def process_shoreline(
 
     if logger:
         logger.info(
-            f"Number of shorelines before filtering by length: {len(contours_epsg)} after filtering: {len(contours_long)}"
+            f"Number of shorelines before removing shorelines < {settings['min_length_sl']}m: {len(contours_epsg)} shorelines. Number of shorelines after filtering shorelines: {len(contours_long)} shorelines"
         )
+
+    if len(shoreline) == 0:
+        return shoreline
+
     logger.info(
         f"Number of shoreline points before removing points within {settings['dist_clouds']}m of cloud mask {len(shoreline)}"
     )
@@ -896,6 +901,10 @@ def process_shoreline(
     logger.info(
         f"Number of shoreline points after removing points within {settings['dist_clouds']}m of cloud mask {len(shoreline)}"
     )
+
+    if len(shoreline) == 0:
+        return shoreline
+
     logger.info(
         f"Number of shoreline points before removing points within 30m of no data pixel {len(shoreline)}"
     )

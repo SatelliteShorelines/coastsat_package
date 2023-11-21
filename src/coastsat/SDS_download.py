@@ -45,7 +45,7 @@ np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 gdal.PushErrorHandler("CPLQuietErrorHandler")
 
 
-def setup_logger(folder, base_filename="download_report"):
+def setup_logger(folder, base_filename="download_report",log_format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"):
     # Determine the next available log file number
     i = 1
     while True:
@@ -57,7 +57,7 @@ def setup_logger(folder, base_filename="download_report"):
 
     # Create a custom logger
     logger = logging.getLogger("satellite_download_logger")
-    logger.setLevel(logging.INFO)  # Log errors and above
+    logger.setLevel(logging.INFO)  # Log all levels of messages
 
     # Create handlers
     file_handler = logging.FileHandler(log_filepath)
@@ -65,7 +65,7 @@ def setup_logger(folder, base_filename="download_report"):
 
     # Create formatters and add it to handlers
     log_format = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+       log_format
     )
     file_handler.setFormatter(log_format)
 
