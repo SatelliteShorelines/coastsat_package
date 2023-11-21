@@ -48,30 +48,7 @@ from coastsat.classification import training_sites
 
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
-
-# # @todo remove this after testing imports
-# def test_imports():
-#     print(
-#         list(
-#             os.path.abspath(resource)
-#             for resource in importlib.resources.files(models).iterdir()
-#             if resource.is_file()
-#         )
-#     )
-#     print(
-#         list(
-#             os.path.abspath(resource)
-#             for resource in importlib.resources.files(training_data).iterdir()
-#             if resource.is_file()
-#         )
-#     )
-#     print(
-#         list(
-#             os.path.abspath(resource)
-#             for resource in importlib.resources.files(training_sites).iterdir()
-#             if resource.is_file()
-#         )
-#     )
+from coastsat.SDS_download import setup_logger
 
 
 # Main function for batch shoreline detection
@@ -134,6 +111,20 @@ def extract_shorelines(
     filepath_data = settings["inputs"]["filepath"]
     collection = settings["inputs"]["landsat_collection"]
 
+    sitename_location = os.path.join(filepath_data, sitename)
+    print(f"sitename_location: {sitename_location}")
+    logger = setup_logger(
+        sitename_location,
+        "extract_shorelines_report",
+        log_format="%(levelname)s - %(message)s",
+    )
+    logger.info(
+        "find_wl_contours2: A method for extracting shorelines that uses the sand water interface to refine the threshold"
+    )
+    logger.info(
+        "find_wl_contours1: A method for extracting shorelines that uses a global threshold, instead of the land water interface"
+    )
+
     # initialise output structure
     output = dict([])
     # create a subfolder to store the .jpg images showing the detection
@@ -142,8 +133,6 @@ def extract_shorelines(
         os.makedirs(filepath_jpg)
     # close all open figures
     plt.close("all")
-
-    # print('Mapping shorelines:')
 
     default_min_length_sl = settings["min_length_sl"]
     # loop through satellite list
@@ -201,11 +190,20 @@ def extract_shorelines(
 
         # convert settings['min_beach_area'] from metres to pixels
         min_beach_area_pixels = np.ceil(settings["min_beach_area"] / pixel_size**2)
+
         # reduce min shoreline length for L7 because of the diagonal bands
         if satname == "L7":
             settings["min_length_sl"] = 200
         else:
             settings["min_length_sl"] = default_min_length_sl
+
+        if satname == "L7":
+            logger.info(
+                f"WARNING: CoastSat has hard-coded the value for the minimum shoreline length for L7 to 200\n\n"
+            )
+        logger.info(
+            f"Extracting shorelines for {satname} Minimum Shoreline Length: {settings['min_length_sl']}\n\n"
+        )
 
         # loop through the images
         for i in tqdm(
@@ -215,6 +213,8 @@ def extract_shorelines(
             apply_cloud_mask = settings.get("apply_cloud_mask", True)
             # get image filename
             fn = SDS_tools.get_filenames(filenames[i], filepath, satname)
+            tif_filename = os.path.basename(fn[0])
+
             # preprocess image (cloud mask + pansharpening/downsampling)
             (
                 im_ms,
@@ -235,23 +235,30 @@ def extract_shorelines(
             image_epsg = metadata[satname]["epsg"][i]
 
             # compute cloud_cover percentage (with no data pixels)
-            cloud_cover_combined = np.divide(
-                sum(sum(cloud_mask.astype(int))),
-                (cloud_mask.shape[0] * cloud_mask.shape[1]),
-            )
+            cloud_cover_combined = np.sum(cloud_mask) / cloud_mask.size
+
             if cloud_cover_combined > 0.99:  # if 99% of cloudy pixels in image skip
+                logger.error(
+                    f"Cloud Cover for image {tif_filename}: {cloud_cover_combined:.2%} > 99% Skipping image.\n\n"
+                )
                 continue
+
             # remove no data pixels from the cloud mask
             # (for example L7 bands of no data should not be accounted for)
+
             cloud_mask_adv = np.logical_xor(cloud_mask, im_nodata)
+
             # compute updated cloud cover percentage (without no data pixels)
-            cloud_cover = np.divide(
-                sum(sum(cloud_mask_adv.astype(int))),
-                (sum(sum((~im_nodata).astype(int)))),
-            )
+            valid_pixels = np.sum(~im_nodata)
+            cloud_cover = np.sum(cloud_mask_adv.astype(int)) / valid_pixels.astype(int)
             # skip image if cloud cover is above user-defined threshold
             if cloud_cover > settings["cloud_thresh"]:
+                logger.error(
+                    f"Cloud Cover for image exceed cloud threshold {tif_filename}: {cloud_cover:.2%} > {settings['cloud_thresh']}. Skipping image.\n\n"
+                )
                 continue
+
+            logger.info(f"Cloud Cover for image {tif_filename}: {cloud_cover:.2%}\n\n")
 
             # calculate a buffer around the reference shoreline (if any has been digitised)
             im_ref_buffer = create_shoreline_buffer(
@@ -261,6 +268,20 @@ def extract_shorelines(
             # classify image in 4 classes (sand, whitewater, water, other) with NN classifier
             im_classif, im_labels = classify_image_NN(
                 im_ms, cloud_mask, min_beach_area_pixels, clf
+            )
+            # sand, whitewater, water, other
+            class_mapping = {
+                0: "sand",
+                1: "whitewater",
+                2: "water",
+            }
+
+            logger.info(
+                f"{tif_filename}: "
+                + f" ".join(
+                    f"{class_name}: {np.any(im_labels[:, :, index])} {np.sum(im_labels[:, :, index])/im_labels[:, :, index].size:.2%}"
+                    for index, class_name in class_mapping.items()
+                )
             )
 
             # if adjust_detection is True, let the user adjust the detected shoreline
@@ -294,11 +315,17 @@ def extract_shorelines(
                         im_mndwi = SDS_tools.nd_index(
                             im_ms[:, :, 4], im_ms[:, :, 1], cloud_mask
                         )
+                        logger.info(
+                            f"{tif_filename}:Not enough sand pixels detected within reference shoreline buffer. Using find_wl_contours1"
+                        )
                         # find water contours on MNDWI grayscale image
                         contours_mwi, t_mndwi = find_wl_contours1(
                             im_mndwi, cloud_mask, im_ref_buffer
                         )
                     else:
+                        logger.info(
+                            f"{tif_filename}:At least 50 Sand pixels detected within reference shoreline buffer. Using find_wl_contours2"
+                        )
                         # use classification to refine threshold and extract the sand/water interface
                         contours_mwi, t_mndwi = find_wl_contours2(
                             im_ms, im_labels, cloud_mask, im_ref_buffer
@@ -368,7 +395,7 @@ def extract_shorelines(
     # change the format to have one list sorted by date with all the shorelines (easier to use)
     output = SDS_tools.merge_output(output)
 
-    # save outputput structure as output.pkl
+    # save outputput structure as output.json
     filepath = os.path.join(filepath_data, sitename)
     json_path = os.path.join(filepath, sitename + "_output.json")
     SDS_preprocess.write_to_json(json_path, output)
