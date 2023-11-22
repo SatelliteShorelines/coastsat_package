@@ -10,6 +10,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import pdb
+import traceback
 
 # image processing modules
 import skimage.filters as filters
@@ -335,11 +336,11 @@ def extract_shorelines(
                             im_ms, im_labels, cloud_mask, im_ref_buffer
                         )
                 except Exception as e:
-                    logger.error(
-                        f"{satname} {shoreline_date}: Could not map shoreline due to error {e}\n\n "
-                    )
                     print(
-                        f" {satname} {shoreline_date}: Could not map shoreline due to error {e}\n\n "
+                        f"{satname} {shoreline_date}: Could not map shoreline due to error {e}"
+                    )
+                    logger.error(
+                        f"{satname} {shoreline_date}: Could not map shoreline due to error {e}\n{traceback.print_exc()}\n "
                     )
                     continue
 
