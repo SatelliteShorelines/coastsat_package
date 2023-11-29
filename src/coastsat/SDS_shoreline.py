@@ -874,10 +874,10 @@ def process_shoreline(
 
     if len(shoreline) == 0:
         return shoreline
-
-    logger.info(
-        f"Number of shoreline points before removing points within {settings['dist_clouds']}m of cloud mask {len(shoreline)}"
-    )
+    if logger:
+        logger.info(
+            f"Number of shoreline points before removing points within {settings['dist_clouds']}m of cloud mask {len(shoreline)}"
+        )
     # 2. Remove any shoreline points that are close to cloud pixels (effect of shadows)
     if np.sum(np.sum(cloud_mask)) > 0:
         # get the coordinates of the cloud pixels
@@ -900,17 +900,17 @@ def process_shoreline(
             ):
                 idx_keep[k] = False
         shoreline = shoreline[idx_keep]
-
-    logger.info(
-        f"Number of shoreline points after removing points within {settings['dist_clouds']}m of cloud mask {len(shoreline)}"
-    )
+    if logger:
+        logger.info(
+            f"Number of shoreline points after removing points within {settings['dist_clouds']}m of cloud mask {len(shoreline)}"
+        )
 
     if len(shoreline) == 0:
         return shoreline
-
-    logger.info(
-        f"Number of shoreline points before removing points within 30m of no data pixel {len(shoreline)}"
-    )
+    if logger:
+        logger.info(
+            f"Number of shoreline points before removing points within 30m of no data pixel {len(shoreline)}"
+        )
     # 3. Remove any shoreline points that are attached to nodata pixels
     if np.sum(np.sum(im_nodata)) > 0:
         # get the coordinates of the cloud pixels
@@ -931,9 +931,10 @@ def process_shoreline(
                 idx_keep[k] = False
         shoreline = shoreline[idx_keep]
 
-    logger.info(
-        f"Number of shoreline points after removing points within 30m of no data pixel {len(shoreline)}"
-    )
+    if logger:
+        logger.info(
+            f"Number of shoreline points after removing points within 30m of no data pixel {len(shoreline)}"
+        )
 
     return shoreline
 
