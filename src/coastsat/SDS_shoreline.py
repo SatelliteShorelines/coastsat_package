@@ -120,10 +120,10 @@ def extract_shorelines(
     )
     logger.info(f"Please read the following information carefully:\n")
     logger.info(
-        "find_wl_contours2: A method for extracting shorelines that uses the sand water interface to refine the threshold that's used to detect shorelines .\n  - This is the default method used when there are enough sand pixels within the reference shoreline buffer.\n"
+        "find_wl_contours2: A method for extracting shorelines that uses the sand water interface detected with the model to refine the threshold that's used to detect shorelines .\n  - This is the default method used when there are enough sand pixels within the reference shoreline buffer.\n"
     )
     logger.info(
-        "find_wl_contours1: A method for extracting shorelines that uses a global threshold, instead of the land water interface.\n  - This is only used when not enough sand pixels are detected within the reference shoreline buffer.\n"
+        "find_wl_contours1: This shoreline extraction method uses a threshold to differentiate between water and land pixels in images, relying on Modified Normalized Difference Water Index (MNDWI) values. However, it may inaccurately classify snow and ice as water, posing a limitation in certain environments.\n  - This is only used when not enough sand pixels are detected within the reference shoreline buffer.\n"
     )
     logger.info(
         "---------------------------------------------------------------------------------------------------------------------"
@@ -337,10 +337,10 @@ def extract_shorelines(
                         )
                 except Exception as e:
                     print(
-                        f"{satname} {shoreline_date}: Could not map shoreline due to error {e}"
+                        f"{satname} {shoreline_date}: Could not map shoreline due to error {str(e)}"
                     )
                     logger.error(
-                        f"{satname} {shoreline_date}: Could not map shoreline due to error {e}\n{traceback.print_exc()}\n "
+                        f"{satname} {shoreline_date}: Could not map shoreline due to error {e}\n{traceback.format_exc()}"
                     )
                     continue
 
