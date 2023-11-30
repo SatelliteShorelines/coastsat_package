@@ -49,7 +49,7 @@ from coastsat.classification import training_sites
 
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
-from coastsat.SDS_download import setup_logger
+from coastsat.SDS_download import setup_logger, release_logger
 
 
 # Main function for batch shoreline detection
@@ -410,6 +410,8 @@ def extract_shorelines(
     filepath = os.path.join(filepath_data, sitename)
     json_path = os.path.join(filepath, sitename + "_output.json")
     SDS_preprocess.write_to_json(json_path, output)
+    # release the logger as it is no longer needed
+    release_logger(logger)
 
     return output
 

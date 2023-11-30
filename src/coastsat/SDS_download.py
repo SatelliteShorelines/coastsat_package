@@ -44,8 +44,25 @@ from coastsat import SDS_preprocess, SDS_tools, gdal_merge
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 gdal.PushErrorHandler("CPLQuietErrorHandler")
 
+def release_logger(logger):
+    """
+    Release the logger and its associated file handlers.
 
-def setup_logger(folder, base_filename="download_report",log_format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"):
+    :param logger: The logger object to be released.
+    """
+    # Remove all handlers associated with the logger
+    for handler in logger.handlers[:]:
+        # Close the handler if it's a FileHandler
+        if isinstance(handler, logging.FileHandler):
+            handler.close()
+        # Remove the handler from the logger
+        logger.removeHandler(handler)
+
+def setup_logger(
+    folder,
+    base_filename="download_report",
+    log_format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+):
     # Determine the next available log file number
     i = 1
     while True:
@@ -64,9 +81,7 @@ def setup_logger(folder, base_filename="download_report",log_format="%(asctime)s
     file_handler.setLevel(logging.INFO)
 
     # Create formatters and add it to handlers
-    log_format = logging.Formatter(
-       log_format
-    )
+    log_format = logging.Formatter(log_format)
     file_handler.setFormatter(log_format)
 
     # Add handlers to the logger
