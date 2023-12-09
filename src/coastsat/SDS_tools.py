@@ -867,12 +867,14 @@ def create_gdf(
     """
     geom = create_geometry(geomtype, shoreline)
     if geom:
-        gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(geom))
-        gdf.index = [idx]
-        gdf.loc[idx, "date"] = date.strftime("%Y-%m-%d %H:%M:%S")
-        gdf.loc[idx, "satname"] = satname
-        gdf.loc[idx, "geoaccuracy"] = geoaccuracy
-        gdf.loc[idx, "cloud_cover"] = cloud_cover
+        # Creating a GeoDataFrame directly with all attributes
+        data = {
+            "date": [date.strftime("%Y-%m-%d %H:%M:%S")],
+            "satname": [satname],
+            "geoaccuracy": [geoaccuracy],
+            "cloud_cover": [cloud_cover],
+        }
+        gdf = gpd.GeoDataFrame(data, geometry=[geom], index=[idx])
         return gdf
     return None
 
