@@ -44,6 +44,7 @@ from coastsat import SDS_preprocess, SDS_tools, gdal_merge
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 gdal.PushErrorHandler("CPLQuietErrorHandler")
 
+
 def release_logger(logger):
     """
     Release the logger and its associated file handlers.
@@ -57,6 +58,7 @@ def release_logger(logger):
             handler.close()
         # Remove the handler from the logger
         logger.removeHandler(handler)
+
 
 def setup_logger(
     folder,
@@ -319,16 +321,17 @@ def merge_image_tiers(inputs, im_dict_T1, im_dict_T2):
     - Updated im_dict_T1 after merging.
     """
 
-    # Merge tier 2 imagery into dictionary
-    for key in inputs["sat_list"]:
-        if key == "S2":
-            continue
-        else:
-            # Check if key exists in both dictionaries
-            if key in im_dict_T1 and key in im_dict_T2:
-                im_dict_T1[key] += im_dict_T2[key]
-            elif key in im_dict_T2:  # If key only exists in im_dict_T2
-                im_dict_T1[key] = im_dict_T2[key]  # Add it to im_dict_T1
+    # Merge tier 2 imagery into dictionary if include_T2 is True
+    if inputs.get("include_T2", False):
+        for key in inputs["sat_list"]:
+            if key in ["S2", "L9"]:
+                continue
+            else:
+                # Check if key exists in both dictionaries
+                if key in im_dict_T1 and key in im_dict_T2:
+                    im_dict_T1[key] += im_dict_T2[key]
+                elif key in im_dict_T2:  # If key only exists in im_dict_T2
+                    im_dict_T1[key] = im_dict_T2[key]  # Add it to im_dict_T1
 
     return im_dict_T1
 
