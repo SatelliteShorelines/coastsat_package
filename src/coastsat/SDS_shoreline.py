@@ -52,6 +52,26 @@ np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 from coastsat.SDS_download import setup_logger, release_logger
 
 
+def get_finite_data(data) -> np.ndarray:
+    """
+    Extracts the valid (non-NaN) values from the input data array.
+
+    Parameters:
+    data (np.ndarray): The input data array.
+
+    Returns:
+    np.ndarray: The array containing only the valid values.
+
+    Raises:
+    ValueError: If no finite data is available for thresholding.
+    """
+    valid_mask = np.isfinite(data)  # Create a mask of valid (non-NaN) values
+    valid_data = data[valid_mask]  # Extract only the valid values
+    if len(valid_data) == 0:
+        raise ValueError("no valid pixels found in reference shoreline buffer.")
+    return valid_data
+
+
 # Main function for batch shoreline detection
 def extract_shorelines(
     metadata,
@@ -135,7 +155,7 @@ def extract_shorelines(
     if not os.path.exists(filepath_jpg):
         os.makedirs(filepath_jpg)
     # close all open figures
-    plt.close("all")
+    # plt.close("all")
 
     default_min_length_sl = settings["min_length_sl"]
     # loop through satellite list
@@ -601,6 +621,8 @@ def find_wl_contours1(im_ndwi, cloud_mask, im_ref_buffer):
     vec = vec_ndwi[np.logical_and(vec_buffer, ~vec_mask)]
     # apply otsu's threshold
     vec = vec[~np.isnan(vec)]
+    if len(vec) == 0:
+        raise ValueError("no valid pixels found in reference shoreline buffer.")
     t_otsu = filters.threshold_otsu(vec)
     # use Marching Squares algorithm to detect contours on ndwi image
     im_ndwi_buffer = np.copy(im_ndwi)
@@ -680,8 +702,13 @@ def find_wl_contours2(im_ms, im_labels, cloud_mask, im_ref_buffer):
 
     # threshold the sand/water intensities
     int_all = np.append(int_water, int_sand, axis=0)
-    t_mwi = filters.threshold_otsu(int_all[:, 0])
-    t_wi = filters.threshold_otsu(int_all[:, 1])
+
+    # if only no data pixels and cloud pixel (indicated by NaN) are found in the buffer, raise an error
+    valid_mwi = get_finite_data(int_all[:, 0])
+    valid_wi = get_finite_data(int_all[:, 1])
+
+    t_mwi = filters.threshold_otsu(valid_mwi)
+    t_wi = filters.threshold_otsu(valid_wi)
 
     # find contour with Marching-Squares algorithm
     im_wi_buffer = np.copy(im_wi)
