@@ -17,6 +17,56 @@ warnings.filterwarnings("ignore")
 import ee
 from coastsat import SDS_download, SDS_tools
 
+
+def adjust_polygon(polygon, proj, **kwargs):
+    """
+    Adjust polygon of ROI to fit exactly with the pixels of the underlying tile
+
+    KV WRL 2022
+
+    Arguments:
+    -----------
+    polygon: list
+        polygon containing the lon/lat coordinates to be extracted,
+        longitudes in the first column and latitudes in the second column,
+        there are 5 pairs of lat/lon with the fifth point equal to the first point:
+        ```
+        polygon = [[[151.3, -33.7],[151.4, -33.7],[151.4, -33.8],[151.3, -33.8],
+        [151.3, -33.7]]]
+        ```
+    proj: ee.Proj
+        projection of the underlying tile
+
+    Returns:
+    -----------
+    ee_region: ee
+        updated list of images
+    """
+    try:
+        # adjust polygon to match image coordinates so that there is no resampling
+        polygon_ee = ee.Geometry.Polygon(polygon)
+        # convert polygon to image coordinates
+        polygon_coords = np.array(
+            ee.List(polygon_ee.transform(proj, 1).coordinates().get(0)).getInfo()
+        )
+        print(polygon_coords)
+        # make it a rectangle
+        xmin = np.min(polygon_coords[:, 0])
+        ymin = np.min(polygon_coords[:, 1])
+        xmax = np.max(polygon_coords[:, 0])
+        ymax = np.max(polygon_coords[:, 1])
+        # round to the closest pixels
+        rect = [np.floor(xmin), np.floor(ymin), np.ceil(xmax), np.ceil(ymax)]
+        # convert back to epsg 4326
+        ee_region = ee.Geometry.Rectangle(rect, proj, True, False).transform(
+            "EPSG:4326"
+        )
+
+        return ee_region
+    except Exception as e:
+        raise e
+
+
 # region of interest (longitude, latitude in WGS84)
 polygon = [
     [
@@ -80,7 +130,7 @@ bands_dict = {
 # test data
 satname = "L8"
 image_id = "LANDSAT/LC08/C02/T2_TOA/LT08_137207_20140501"  # corrupt image
-# image_id = "LANDSAT/LC08/C02/T1_TOA/LC08_040037_20141219" # normal image
+# image_id = "LANDSAT/LC08/C02/T1_TOA/LC08_040037_20141219"  # normal image
 image_ee = ee.Image(image_id)
 im_folder = (
     r"C:\development\doodleverse\coastsat_package\coastsat_package\data\l8_failure2"
@@ -94,7 +144,7 @@ im_bands = image_ee.getInfo()["bands"]
 for j in range(len(im_bands)):
     del im_bands[j]["dimensions"]
 proj_ms = image_ee.select("B1").projection()
-ee_region_ms = SDS_download.adjust_polygon(inputs["polygon"], proj_ms)
+ee_region_ms = adjust_polygon(polygon, proj_ms)
 bands = {}
 bands["ms"] = [
     im_bands[_] for _ in range(len(im_bands)) if im_bands[_]["id"] in bands_id
@@ -107,4 +157,5 @@ try:
     )
     raise AssertionError("RequestSizeExceededError was not raised")
 except SDS_download.RequestSizeExceededError:
+    print("Correct Error raised")
     pass  # The exception was raised, so the test should pass
