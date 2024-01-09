@@ -316,9 +316,13 @@ def get_zero_pixels(im_ms: np.ndarray, shape: tuple) -> np.ndarray:
     considered to be a zero pixel only if all of these three bands have a zero value for that pixel.
     """
     # Identify identify pixels with 0 intensity in the Green, NIR and SWIR bands
-    im_zeros = np.ones(shape).astype(bool)
+    # im_zeros = np.ones(shape).astype(bool) # old code @todo remove this line if the new code works
+    # for k in [1, 3, 4]:  # loop through the Green, NIR and SWIR bands
+    #     im_zeros = np.logical_and(np.isin(im_ms[:, :, k], 0), im_zeros)
+    # modify the logic to add ANY pixel with 0 intensity in ANY of the Green, NIR and SWIR bands to the im_zeros mask
+    im_zeros = np.zeros(shape).astype(bool)
     for k in [1, 3, 4]:  # loop through the Green, NIR and SWIR bands
-        im_zeros = np.logical_and(np.isin(im_ms[:, :, k], 0), im_zeros)
+        im_zeros = np.logical_or(np.isin(im_ms[:, :, k], 0), im_zeros)
     return im_zeros
 
 
@@ -550,7 +554,8 @@ def preprocess_single(
             im_nodata = np.logical_or(im_zeros, im_nodata)
             if "merged" in fn_ms:
                 im_nodata = morphology.dilation(im_nodata, morphology.square(5))
-
+            # update cloud mask with all the nodata pixels
+            cloud_mask = np.logical_or(cloud_mask, im_nodata)
         else:
             # compute cloud mask using QA60 band
             cloud_mask_QA60 = create_cloud_mask(
@@ -567,10 +572,10 @@ def preprocess_single(
             im_zeros = get_zero_pixels(im_ms, cloud_mask.shape)
             # add zeros to im nodata
             im_nodata = np.logical_or(im_zeros, im_nodata)
-            # update cloud mask with all the nodata pixels
-            cloud_mask = np.logical_or(cloud_mask, im_nodata)
             if "merged" in fn_ms:
                 im_nodata = morphology.dilation(im_nodata, morphology.square(5))
+            # update cloud mask with all the nodata pixels
+            cloud_mask = np.logical_or(cloud_mask, im_nodata)
 
         # no extra image
         im_extra = []
