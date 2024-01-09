@@ -1159,10 +1159,11 @@ def check_images_available(inputs):
         "L7": "LANDSAT/LE07/%s/T1_TOA" % inputs["landsat_collection"],
         "L8": "LANDSAT/LC08/%s/T1_TOA" % inputs["landsat_collection"],
         "L9": "LANDSAT/LC09/C02/T1_TOA",  # only C02 for Landsat 9
-        "S2": "COPERNICUS/S2",
+        "S2": "COPERNICUS/S2_HARMONIZED",
     }
     im_dict_T1 = dict([])
     sum_img = 0
+    # gets the list of images for each satellite mission
     for satname in inputs["sat_list"]:
         im_list = get_image_info(
             col_names_T1[satname],
@@ -1171,10 +1172,14 @@ def check_images_available(inputs):
             dates_str,
             S2tile=inputs.get("S2tile", ""),
         )
+        # S2 contains many duplicates images so filter collection to only keep images with same UTM Zone projection
+        if satname == "S2":
+            im_list = filter_S2_collection(im_list)
         sum_img = sum_img + len(im_list)
         print("     %s: %d images" % (satname, len(im_list)))
         im_dict_T1[satname] = im_list
 
+    # CREATES A DICTIONARY OF SATELLITES CONTAINING THE IMAGES IN TIER 1 IN COLLECTION C01 AND C02
     # if using C01 (only goes to the end of 2021), complete with C02 for L7 and L8
     if dates[1] > datetime(2022, 1, 1) and inputs["landsat_collection"] == "C01":
         print("  -> completing Tier 1 with C02 after %s..." % "2022-01-01")
@@ -1184,8 +1189,9 @@ def check_images_available(inputs):
         }
         dates_C02 = ["2022-01-01", dates_str[1]]
         for satname in inputs["sat_list"]:
+            # L7 and L8 have images in both C01 and C02, so complete each list with the other collection
             if satname not in ["L7", "L8"]:
-                continue  # only L7 and L8
+                continue
             im_list = get_image_info(
                 col_names_C02[satname], satname, polygon, dates_C02
             )
@@ -1199,6 +1205,7 @@ def check_images_available(inputs):
     if len(inputs["sat_list"]) == 1 and inputs["sat_list"][0] == "S2":
         return im_dict_T1, []
 
+    # CREATES A DICTIONARY OF SATELLITES CONTAINING THE IMAGES IN TIER 2
     # if user also requires Tier 2 images, check the T2 collections as well
     col_names_T2 = {
         "L5": "LANDSAT/LT05/%s/T2_TOA" % inputs["landsat_collection"],
@@ -1225,6 +1232,7 @@ def check_images_available(inputs):
         }
         dates_C02 = ["2022-01-01", dates_str[1]]
         for satname in inputs["sat_list"]:
+            # L7 and L8 have images in both C01 and C02, so complete each list with the other collection
             if satname not in ["L7", "L8"]:
                 continue  # only L7 and L8
             im_list = get_image_info(
@@ -1279,11 +1287,6 @@ def get_s2cloudless(image_list: list, inputs: dict):
                 matched_cloud_images.append(cloud_images_list[matched_index])
             else:  # append an empty list if no match is found
                 matched_cloud_images.append([])
-        # try:
-        #     matched_index = cloud_indices.index(index)
-        #     matched_cloud_images.append(cloud_images_list[matched_index])
-        # except ValueError:  # handle the case where index is not in cloud_indices
-        #     matched_cloud_images.append([])
 
         return matched_cloud_images
     except Exception as e:
