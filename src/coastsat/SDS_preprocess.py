@@ -31,11 +31,43 @@ import pickle
 import geopandas as gpd
 from shapely import geometry
 import re
+import logging
 
 # CoastSat modules
 from coastsat import SDS_tools
 
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
+
+
+def find_edge_padding(im_band):
+    # Assuming non-data values are zeros. Adjust the condition if needed.
+    is_data = im_band != 0
+
+    # Function to find padding for one edge
+    def find_edge_data(is_data_along_edge):
+        for idx, has_data in enumerate(is_data_along_edge):
+            if has_data:
+                return idx
+        return len(is_data_along_edge)  # Return full length if no data found
+
+    # Calculate padding for each side
+    top_padding = find_edge_data(np.any(is_data, axis=1))
+    bottom_padding = find_edge_data(np.any(is_data, axis=1)[::-1])
+    left_padding = find_edge_data(np.any(is_data, axis=0))
+    right_padding = find_edge_data(np.any(is_data, axis=0)[::-1])
+
+    return top_padding, bottom_padding, left_padding, right_padding
+
+
+def pad_edges(im_swir, im_nodata) -> np.ndarray:
+    top_pad, bottom_pad, left_pad, right_pad = find_edge_padding(im_swir)
+
+    # Apply this padding to your masks or other arrays as needed
+    im_nodata[:top_pad, :] = True
+    im_nodata[-bottom_pad:, :] = True
+    im_nodata[:, :left_pad] = True
+    im_nodata[:, -right_pad:] = True
+    return im_nodata
 
 
 def write_to_json(filepath: str, settings: dict):
@@ -316,13 +348,13 @@ def get_zero_pixels(im_ms: np.ndarray, shape: tuple) -> np.ndarray:
     considered to be a zero pixel only if all of these three bands have a zero value for that pixel.
     """
     # Identify identify pixels with 0 intensity in the Green, NIR and SWIR bands
-    # im_zeros = np.ones(shape).astype(bool) # old code @todo remove this line if the new code works
-    # for k in [1, 3, 4]:  # loop through the Green, NIR and SWIR bands
-    #     im_zeros = np.logical_and(np.isin(im_ms[:, :, k], 0), im_zeros)
-    # modify the logic to add ANY pixel with 0 intensity in ANY of the Green, NIR and SWIR bands to the im_zeros mask
-    im_zeros = np.zeros(shape).astype(bool)
+    im_zeros = np.ones(shape).astype(bool)
     for k in [1, 3, 4]:  # loop through the Green, NIR and SWIR bands
-        im_zeros = np.logical_or(np.isin(im_ms[:, :, k], 0), im_zeros)
+        im_zeros = np.logical_and(np.isin(im_ms[:, :, k], 0), im_zeros)
+    # modify the logic to add ANY pixel with 0 intensity in ANY of the Green, NIR and SWIR bands to the im_zeros mask
+    # im_zeros = np.zeros(shape).astype(bool)
+    # for k in [1, 3, 4]:  # loop through the Green, NIR and SWIR bands
+    #     im_zeros = np.logical_or(np.isin(im_ms[:, :, k], 0), im_zeros)
     return im_zeros
 
 
@@ -545,6 +577,7 @@ def preprocess_single(
             cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
+            # im_nodata = pad_edges(im_swir, im_nodata)
             # cloud mask is the no data mask
             cloud_mask = im_nodata.copy()
             # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
@@ -555,7 +588,8 @@ def preprocess_single(
             if "merged" in fn_ms:
                 im_nodata = morphology.dilation(im_nodata, morphology.square(5))
             # update cloud mask with all the nodata pixels
-            cloud_mask = np.logical_or(cloud_mask, im_nodata)
+            # v0.1.40 change : might be bug
+            # cloud_mask = np.logical_or(cloud_mask, im_nodata)
         else:
             # compute cloud mask using QA60 band
             cloud_mask_QA60 = create_cloud_mask(
@@ -567,15 +601,17 @@ def preprocess_single(
             cloud_mask = np.logical_or(cloud_mask_QA60, cloud_mask_s2cloudless)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
+            # im_nodata = pad_edges(im_swir, im_nodata)
             # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
             # to the cloud mask as otherwise they will cause errors when calculating the NDWI and MNDWI
             im_zeros = get_zero_pixels(im_ms, cloud_mask.shape)
             # add zeros to im nodata
             im_nodata = np.logical_or(im_zeros, im_nodata)
-            if "merged" in fn_ms:
-                im_nodata = morphology.dilation(im_nodata, morphology.square(5))
             # update cloud mask with all the nodata pixels
             cloud_mask = np.logical_or(cloud_mask, im_nodata)
+            if "merged" in fn_ms:
+                im_nodata = morphology.dilation(im_nodata, morphology.square(5))
+            # move cloud mask to above if statement to avoid bug in v0.1.40
 
         # no extra image
         im_extra = []
