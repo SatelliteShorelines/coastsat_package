@@ -760,7 +760,9 @@ def retrieve_images(
                         "mask": filter_bands(im_bands, bands_id[-1:]),
                     }
                     # adjust polygon for both ms and pan bands
+                    # RGB and NIR bands 10m resolution and same footprint
                     proj_ms = image_ee.select("B1").projection()
+                    # SWIR band 20m resolution and different footprint
                     proj_swir = image_ee.select("B11").projection()
                     proj_mask = image_ee.select("QA60").projection()
                     pbar.set_description_str(
@@ -1578,7 +1580,7 @@ def warp_image_to_target(
     xmax = np.max(extent_coords[:, 0])
     ymax = np.max(extent_coords[:, 1])
 
-    # use gdal_warp to resample the inputon the target image pixel grid
+    # use gdal_warp to resample the input onto the target image pixel grid
     options = gdal.WarpOptions(
         xRes=xres,
         yRes=yres,
