@@ -155,7 +155,7 @@ def extract_shorelines(
     if not os.path.exists(filepath_jpg):
         os.makedirs(filepath_jpg)
     # close all open figures
-    # plt.close("all")
+    plt.close("all")
 
     default_min_length_sl = settings["min_length_sl"]
     # loop through satellite list
