@@ -1019,7 +1019,8 @@ def show_detection(
             if True, lets user manually accept/reject the mapped shorelines
         'save_figure': bool
             if True, saves a -jpg file for each mapped shoreline
-
+    im_ref_buffer
+        binary image containing a buffer around the reference shoreline
     Returns:
     -----------
     skip_image: boolean
@@ -1215,7 +1216,7 @@ def show_detection(
 
     # if save_figure is True, save a .jpg under /jpg_files/detection
     if settings["save_figure"] and not skip_image:
-        fig.savefig(os.path.join(filepath, date + "_" + satname + ".jpg"), dpi=150)
+        fig.savefig(os.path.join(filepath, date + "_" + satname + ".jpg"), dpi=150,bbox_inches='tight')
 
     # don't close the figure window, but remove all axes and settings, ready for next plot
     for ax in fig.axes:
