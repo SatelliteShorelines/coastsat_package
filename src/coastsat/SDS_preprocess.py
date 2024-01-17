@@ -39,7 +39,17 @@ from coastsat import SDS_tools
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
 
-def find_edge_padding(im_band):
+def find_edge_padding(im_band: np.ndarray) -> np.ndarray:
+    """
+    Finds the padding required for each edge of an image band based on the presence of data.
+
+    Parameters:
+    im_band (numpy.ndarray): The image band.
+
+    Returns:
+    tuple: A tuple containing the top, bottom, left, and right padding values.
+    """
+
     # Assuming non-data values are zeros. Adjust the condition if needed.
     is_data = im_band != 0
 
@@ -59,14 +69,37 @@ def find_edge_padding(im_band):
     return top_padding, bottom_padding, left_padding, right_padding
 
 
-def pad_edges(im_swir, im_nodata) -> np.ndarray:
+def pad_edges(im_swir: np.ndarray, im_nodata: np.ndarray) -> np.ndarray:
+    """
+    Adds 0's located along the edges of im_swir to the nodata array.
+
+    Fixes the issue where 0s are created along the edges of the SWIR1 band caused by reprojecting the 20 m band onto the 10m pixel grid (with bilinear interpolation in GDAL)
+
+    Args:
+        im_swir (np.ndarray): The SWIR image.
+        im_nodata (np.ndarray): The nodata array.
+
+    Returns:
+        np.ndarray: The nodata array with padded edges.
+    """
+    # check if the two images are the same shape and if not then return the original nodata array
+    # Typically im_swir has shape (x,y,1) and im_nodata has shape (x,y)
+
+    # if im_swir.shape != im_nodata.shape:
+    #     return im_nodata
+
     top_pad, bottom_pad, left_pad, right_pad = find_edge_padding(im_swir)
+
+    # if bottom pad is 0 the entire image gets set to True
+    if bottom_pad > 0:
+        im_nodata[-bottom_pad:, :] = True
+    # if right pad is 0 the entire image gets set to True
+    if right_pad > 0:
+        im_nodata[:, -right_pad:] = True
 
     # Apply this padding to your masks or other arrays as needed
     im_nodata[:top_pad, :] = True
-    im_nodata[-bottom_pad:, :] = True
     im_nodata[:, :left_pad] = True
-    im_nodata[:, -right_pad:] = True
     return im_nodata
 
 
@@ -577,7 +610,7 @@ def preprocess_single(
             cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
-            # im_nodata = pad_edges(im_swir, im_nodata)
+            im_nodata = pad_edges(im_swir, im_nodata)
             # cloud mask is the no data mask
             cloud_mask = im_nodata.copy()
             # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
@@ -589,8 +622,8 @@ def preprocess_single(
                 im_nodata = morphology.dilation(im_nodata, morphology.square(5))
             # update cloud mask with all the nodata pixels
             # v0.1.40 change : might be bug
-            # cloud_mask = np.logical_or(cloud_mask, im_nodata)
-        else:
+            cloud_mask = np.logical_or(cloud_mask, im_nodata)
+        else:  # apply the cloud mask
             # compute cloud mask using QA60 band
             cloud_mask_QA60 = create_cloud_mask(
                 im_QA, satname, cloud_mask_issue, collection
@@ -601,7 +634,7 @@ def preprocess_single(
             cloud_mask = np.logical_or(cloud_mask_QA60, cloud_mask_s2cloudless)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
-            # im_nodata = pad_edges(im_swir, im_nodata)
+            im_nodata = pad_edges(im_swir, im_nodata)
             # check if there are pixels with 0 intensity in the Green, NIR and SWIR bands and add those
             # to the cloud mask as otherwise they will cause errors when calculating the NDWI and MNDWI
             im_zeros = get_zero_pixels(im_ms, cloud_mask.shape)
