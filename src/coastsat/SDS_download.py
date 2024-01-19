@@ -487,11 +487,12 @@ def retrieve_images(
                     cloud_prob = im_cloud.select("probability").rename("s2cloudless")
                     image_ee = image_ee.addBands(cloud_prob)
 
-                # first delete dimensions key from dictionary
-                # otherwise the entire image is extracted (don't know why)
+                # update the loading bar with the status
                 pbar.set_description_str(
                     desc=f"{satname}: Loading bands for {i}th image ", refresh=True
                 )
+                # first delete dimensions key from dictionary
+                # otherwise the entire image is extracted (don't know why)
                 im_bands = remove_dimensions_from_bands(
                     image_ee, image_id=im_meta["id"], logger=logger
                 )
