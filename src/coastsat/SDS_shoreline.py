@@ -230,7 +230,7 @@ def extract_shorelines(
 
         # loop through the images
         for i in tqdm(
-            range(len(filenames)), desc="{satname}: Mapping Shorelines", leave=True, position=0
+            range(len(filenames)), desc=f"{satname}: Mapping Shorelines", leave=True, position=0
         ):
             # print('\r%s:   %d%%' % (satname,int(((i+1)/len(filenames))*100)), end='')
             apply_cloud_mask = settings.get("apply_cloud_mask", True)
