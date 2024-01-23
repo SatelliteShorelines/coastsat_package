@@ -588,6 +588,8 @@ def retrieve_images(
                     for original_file in [fn_ms, fn_QA]:
                         os.remove(original_file)
                     if save_jpg:
+                        # location of the tif folder for that satellite
+                        # For ex. S2 contains 2 tif folders /ms /swir /mask
                         tif_paths = SDS_tools.get_filepath(inputs, satname)
                         SDS_preprocess.save_single_jpg(
                             filename=im_fn["ms"],
@@ -1115,6 +1117,55 @@ def get_metadata(inputs):
 # AUXILIARY FUNCTIONS
 ###################################################################################################
 
+def remove_existing_imagery(image_dict:dict, metadata:dict,sat_list:list[str])->dict:
+    """
+    Removes existing imagery from the image dictionary based on the provided metadata.
+
+    Args:
+        image_dict (dict): A dictionary containing satellite imagery data.
+            Each image_dict contains a list of images for each satellite.
+            Each image in the list must contain the keys ['properties']['system:time_start']
+            Each image is a dictionary containing the image properties, dates and metadata obtained from the server it was downloaded from.
+            Example:
+            {
+                'L5': [{'type': 'Image',
+                        'bands': [{'id': 'B1',
+                        'data_type': {'type': 'PixelType',
+                        'precision': 'int',
+                        'min': 0,
+                        'max': 65535},
+                        'dimensions': [1830, 1830],
+                        'crs': 'EPSG:32618',
+                        'crs_transform': [60, 0, 499980, 0, -60, 4500000]},...},  
+                {...}, ...],   
+            }
+        metadata (dict): A dictionary containing metadata information.
+            Contains metadata for each satellite in the following format:
+            {
+                'L5':{'filenames':[], 'dates':[], 'epsg':[], 'acc_georef':[], 'im_quality':[], 'im_dimensions':[]},
+                'L7':{'filenames':[], 'dates':[], 'epsg':[], 'acc_georef':[], 'im_quality':[], 'im_dimensions':[]},
+                'L8':{'filenames':[], 'dates':[], 'epsg':[], 'acc_georef':[], 'im_quality':[], 'im_dimensions':[]},
+                'L9':{'filenames':[], 'dates':[], 'epsg':[], 'acc_georef':[], 'im_quality':[], 'im_dimensions':[]},
+                'S2':{'filenames':[], 'dates':[], 'epsg':[], 'acc_georef':[], 'im_quality':[], 'im_dimensions':[]}
+            }
+        sat_list (list[str]): A list of satellite names.
+
+    Returns:
+        dict: The updated image dictionary after removing existing imagery.
+    """
+    for satname in sat_list:
+        if satname in metadata and metadata[satname]['dates']:
+            first_date = metadata[satname]['dates'][0] - timedelta(days=1)
+            last_date = metadata[satname]['dates'][-1] + timedelta(days=1)
+            date_list = [datetime.fromtimestamp(image['properties']['system:time_start'] / 1000, tz=pytz.utc) for image in image_dict[satname]]
+
+            idx_new = np.where([not (first_date < img_date < last_date) for img_date in date_list])[0]
+            image_dict[satname] = [image_dict[satname][index] for index in idx_new]
+
+            num_existing = len(date_list) - len(idx_new)
+            print(f'{satname}: {num_existing} images already exist, {len(idx_new)} to download')
+
+    return image_dict
 
 def check_images_available(inputs):
     """
@@ -1126,7 +1177,7 @@ def check_images_available(inputs):
      Arguments:
      -----------
      inputs: dict
-         inputs dictionnary
+         inputs dictionary
 
      Returns:
      -----------
@@ -1203,6 +1254,16 @@ def check_images_available(inputs):
             im_dict_T1[satname] += im_list
 
     print("  Total to download: %d images" % sum_img)
+    
+    
+    # if the directory already exists, remove the images that already exist
+    filepath = os.path.join(inputs['filepath'],inputs['sitename'])
+    if os.path.exists(filepath):
+        # get the metadata and satellites that need to be filtered
+        sat_list = inputs["sat_list"]
+        metadata = get_metadata(inputs)
+        # remove any images that already exist from im_dict_T1 because they've already been downloaded
+        im_dict_T1 = remove_existing_imagery(im_dict_T1, metadata,sat_list)
 
     # if only S2 is in sat_list, stop here as no Tier 2 for Sentinel
     if len(inputs["sat_list"]) == 1 and inputs["sat_list"][0] == "S2":
