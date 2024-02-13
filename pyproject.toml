@@ -12,14 +12,16 @@ where = ["src"]
 [project]
 name = "coastsat_package"
 dynamic = ["readme"]
-version = "0.1.45"
+version = "0.1.46"
 authors = [
   { name="Kilian Vos & Sharon Fitzpatrick" },
 ]
 # find` directive with `include` or `exclude`
 description = "A Global shoreline mapping tool from satellite imagery"
 dependencies = [ "scikit-image",
- "earthengine-api>=0.1.304",
+  "earthengine-api>=0.1.304",
+  "jupyterlab>=3.0.0",
+  "geopandas",
   "matplotlib",
   "astropy",
   "tqdm",
