@@ -183,6 +183,9 @@ def remove_dimensions_from_bands(image_ee, **kwargs):
     # first delete dimensions key from dictionary
     # otherwise the entire image is extracted (don't know why)
     im_bands = image_ee.getInfo()["bands"]
+    
+    # remove some additional masks provided with S2
+    im_bands = [band for band in im_bands if 'MSK_CLASSI' not in band['id']]
     for j in range(len(im_bands)):
         del im_bands[j]["dimensions"]
     return im_bands
