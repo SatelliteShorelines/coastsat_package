@@ -401,7 +401,14 @@ def compute_intersection_QC(output, transects, settings, use_progress_bar: bool 
             # compute the percentage of data points where the std is larger than the user-defined max
             prc_over = np.sum(std_intersect > settings["max_std"]) / len(std_intersect)
             # if more than a certain percentage is above, use the maximum intersection
-            if prc_over > settings["prc_multiple"]:
+            
+            prc_multiple = settings.get("prc_multiple")
+            if prc_multiple is None:
+                prc_multiple = settings.get("auto_prc")
+                if prc_multiple is None:
+                    raise KeyError("Neither 'prc_multiple' nor 'auto_prc' exist in the settings.")
+            
+            if prc_over > prc_multiple:
                 med_intersect[~idx_good] = max_intersect[~idx_good]
                 med_intersect[~condition3] = np.nan
             # otherwise put a nan
