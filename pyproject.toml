@@ -12,7 +12,7 @@ where = ["src"]
 [project]
 name = "coastsat_package"
 dynamic = ["readme"]
-version = "0.1.47"
+version = "0.1.48"
 authors = [
   { name="Sharon Fitzpatrick" },
 ]
@@ -28,7 +28,8 @@ dependencies = [ "scikit-image",
   "importlib-resources",
   "pyqt5",
   "scipy",
-  "numpy"]
+  "numpy",
+  "imageio"]
 license = { file="LICENSE" }
 requires-python = ">=3.8"
 classifiers = [
