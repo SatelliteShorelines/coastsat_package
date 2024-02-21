@@ -156,6 +156,7 @@ def label_images(metadata, settings):
             # remove no data pixels from the cloud mask (for example L7 bands of no data should not be accounted for)
             cloud_mask_adv = np.logical_xor(cloud_mask, im_nodata)
             # compute updated cloud cover percentage (without no data pixels)
+            # get the percentage of the image that is covered by clouds that have valid data
             cloud_cover = np.divide(
                 sum(sum(cloud_mask_adv.astype(int))),
                 (sum(sum((~im_nodata).astype(int)))),

@@ -112,6 +112,8 @@ def extract_shorelines(
             if True, allows user to manually adjust the detected shoreline
         'pan_off': bool
             if True, no pan-sharpening is performed on Landsat 7,8 and 9 imagery
+        's2cloudless_prob': float [0,100)
+            threshold to identify cloud pixels in the s2cloudless probability mask            
 
     Returns:
     -----------
@@ -253,6 +255,7 @@ def extract_shorelines(
                 settings["pan_off"],
                 collection,
                 apply_cloud_mask,
+                settings.get("s2cloudless_prob",60),
             )
             # get image spatial reference system (epsg code) from metadata dict
             image_epsg = metadata[satname]["epsg"][i]

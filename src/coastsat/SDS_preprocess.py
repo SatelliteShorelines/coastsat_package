@@ -393,7 +393,7 @@ def get_zero_pixels(im_ms: np.ndarray, shape: tuple) -> np.ndarray:
 
 # Main function to preprocess a satellite image (L5, L7, L8, L9 or S2)
 def preprocess_single(
-    fn, satname, cloud_mask_issue, pan_off, collection, do_cloud_mask=True
+    fn, satname, cloud_mask_issue, pan_off, collection, do_cloud_mask=True, s2cloudless_prob=60
 ):
     """
     Reads the image and outputs the pansharpened/down-sampled multispectral bands,
@@ -418,6 +418,10 @@ def preprocess_single(
         if True, disable panchromatic sharpening and ignore pan band
     collection: str
         Landsat collection ,'C01' or 'C02'
+    do_cloud_mask: boolean
+        if True, apply the cloud mask to the image. If False, the cloud mask is not applied.
+    s2cloudless_prob: float [0,100)
+            threshold to identify cloud pixels in the s2cloudless probability mask
 
     Returns:
     -----------
@@ -608,6 +612,10 @@ def preprocess_single(
         im_QA = read_bands(fn_mask)[0]
         if not do_cloud_mask:
             cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
+            # compute cloud mask using s2cloudless probability band
+            cloud_mask_s2cloudless = create_s2cloudless_mask(cloud_prob, s2cloudless_prob)
+            # combine both cloud masks
+            cloud_mask = np.logical_or(cloud_mask_QA60,cloud_mask_s2cloudless)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
             im_nodata = pad_edges(im_swir, im_nodata)
@@ -629,9 +637,9 @@ def preprocess_single(
                 im_QA, satname, cloud_mask_issue, collection
             )
             # compute cloud mask using s2cloudless probability band
-            cloud_mask_s2cloudless = create_s2cloudless_mask(cloud_prob, 60)
+            cloud_mask_s2cloudless = create_s2cloudless_mask(cloud_prob, s2cloudless_prob)
             # combine both cloud masks
-            cloud_mask = np.logical_or(cloud_mask_QA60, cloud_mask_s2cloudless)
+            cloud_mask = np.logical_or(cloud_mask_QA60,cloud_mask_s2cloudless)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
             im_nodata = pad_edges(im_swir, im_nodata)
@@ -730,7 +738,7 @@ def create_cloud_mask(im_QA, satname, cloud_mask_issue, collection):
     return cloud_mask
 
 
-def create_s2cloudless_mask(cloud_prob, threshold=50):
+def create_s2cloudless_mask(cloud_prob, s2cloudless_prob=60):
     """
     Creates a cloud mask using the s2cloudless band.
 
@@ -740,6 +748,9 @@ def create_s2cloudless_mask(cloud_prob, threshold=50):
     -----------
     cloud_prob: np.array
         Image containing the s2cloudless cloud probability
+    s2cloudless_prob: float [0,100)
+        threshold to identify cloud pixels in the s2cloudless probability mask. Default is 60.
+        If the cloud probability is above this threshold, the pixel is classified as cloudy.
 
     Returns:
     -----------
@@ -748,7 +759,7 @@ def create_s2cloudless_mask(cloud_prob, threshold=50):
 
     """
     # find which pixels have bits corresponding to cloud values
-    cloud_mask = cloud_prob > threshold
+    cloud_mask = cloud_prob > s2cloudless_prob
     # dilate cloud mask
     elem = morphology.square(6)  # use a square of width 6 pixels
     cloud_mask = morphology.binary_opening(cloud_mask, elem)  # perform image opening
@@ -1061,6 +1072,10 @@ def save_jpg(metadata, settings, **kwargs):
         'cloud_mask_issue': boolean
             True if there is an issue with the cloud mask and sand pixels
             are erroneously being masked on the images
+        's2cloudless_prob': float [0,100)
+            threshold to identify cloud pixels in the s2cloudless probability mask
+        'use_matplotlib': boolean
+            False to save a .jpg and True to save as matplotlib plots
 
     Returns:
     -----------
@@ -1070,8 +1085,10 @@ def save_jpg(metadata, settings, **kwargs):
 
     sitename = settings["inputs"]["sitename"]
     cloud_thresh = settings["cloud_thresh"]
+    s2cloudless_prob = settings.get('s2cloudless_prob',60)
     filepath_data = settings["inputs"]["filepath"]
     collection = settings["inputs"]["landsat_collection"]
+    
 
     # create subfolder to store the jpg files
     filepath_jpg = os.path.join(filepath_data, sitename, "jpg_files", "preprocessed")
@@ -1098,6 +1115,7 @@ def save_jpg(metadata, settings, **kwargs):
                 settings["pan_off"],
                 collection,
                 apply_cloud_mask,
+                s2cloudless_prob=s2cloudless_prob,
             )
 
             # compute cloud_cover percentage (with no data pixels)
@@ -1221,6 +1239,7 @@ def get_reference_sl(metadata, settings):
             settings["pan_off"],
             collection,
             apply_cloud_mask,
+            settings.get('s2cloudless_prob',60)
         )
 
         # compute cloud_cover percentage (with no data pixels)
@@ -1355,7 +1374,7 @@ def get_reference_sl(metadata, settings):
                 pts = ginput(n=50000, timeout=-1, show_clicks=True)
                 pts_pix = np.array(pts)
                 # convert pixel coordinates to world coordinates
-                pts_world = SDS_tools.convert_pix2world(pts_pix[:, [1, 0]], georef)
+                pts_world = SDS_tools.convert_pix2world(pts_pix[:,[1,0]], georef)
                 # interpolate between points clicked by the user (1m resolution)
                 pts_world_interp = np.expand_dims(np.array([np.nan, np.nan]), axis=0)
                 for k in range(len(pts_world) - 1):
