@@ -22,6 +22,8 @@ import skimage.transform as transform
 import pytz
 import pdb
 
+
+
 # np.seterr(all='ignore') # raise/ignore divisions by 0 and nans
 
 ###################################################################################################
@@ -1126,6 +1128,18 @@ def smallest_rectangle(polygon):
     polygon_rect = [[[_[0], _[1]] for _ in coords_polygon]]
     return polygon_rect
 
+def make_animation_mp4(filepath_images, fps, fn_out):
+    "function to create an animation with the saved figures"
+    import imageio
+    
+    with imageio.get_writer(fn_out, mode='I', fps=fps) as writer:
+        filenames = os.listdir(filepath_images)
+        # order chronologically
+        filenames = np.sort(filenames)
+        for i in range(len(filenames)):
+            image = imageio.imread(os.path.join(filepath_images,filenames[i]))
+            writer.append_data(image)
+    print('Animation has been generated (using %d frames per second) and saved at %s'%(fps,fn_out))
 
 def compare_timeseries(ts, gt, key, settings):
     if key not in gt.keys():
