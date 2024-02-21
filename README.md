@@ -5,8 +5,11 @@ This is coastsat-package the pip and conda package extension of [CoastSat](https
 ## What's Changed?
 
 - JPGs for RGB, NIR,and SWIR are created within the jpg_files folder for each downloaded session
+- Extracted shorelines are saved as .json files instead of pkl files
+- The download progress bar shows which image is being downloaded and which stage of the download process the image is at
 - Users can turn on / off the cloud mask with the 'apply_cloud_mask' setting
-- ## Minor organizational changes to make CoastSat more organized and compatible to be packaged.
+- Minor organizational changes to make CoastSat more organized and compatible to be packaged.
+
 
 ## Install CoastSat with conda
 
