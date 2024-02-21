@@ -3,3 +3,5 @@
 data/*
 *ipynb_checkpoints*
 dist/*
+*.prof
+./data/*
