@@ -17,12 +17,16 @@ import pdb
 # other modules
 import skimage.transform as transform
 from pylab import ginput
+from scipy import stats
 
 # CoastSat modules
-# from coastsat import SDS_tools
 from coastsat import SDS_tools
 
 from tqdm.auto import tqdm
+
+# Global variables
+DAYS_IN_YEAR = 365.2425
+SECONDS_IN_DAY = 24*3600
 
 ###################################################################################################
 # DRAW/LOAD TRANSECTS
@@ -793,3 +797,11 @@ def monthly_average(dates, chainages):
         np.array(chainage_seasonal),
         np.array(season_ts),
     )
+
+def calculate_trend(dates,chainage):
+    "calculate long-term trend"
+    dates_ord = np.array([_.toordinal() for _ in dates])
+    dates_ord = (dates_ord - np.min(dates_ord))/DAYS_IN_YEAR   
+    trend, intercept, rvalue, pvalue, std_err = stats.linregress(dates_ord, chainage)
+    y = dates_ord*trend+intercept
+    return trend, y
