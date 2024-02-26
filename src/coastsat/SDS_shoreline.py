@@ -613,10 +613,10 @@ def find_wl_contours1(im_ndwi, cloud_mask, im_ref_buffer):
     """
     nrows = cloud_mask.shape[0]
     ncols = cloud_mask.shape[1]
-    # use im_ref_buffer and dilate it by 5 pixels
-    se = morphology.disk(5)
-    im_ref_buffer_extra = morphology.binary_dilation(im_ref_buffer, se)
-    vec_buffer = im_ref_buffer_extra.reshape(nrows * ncols)
+    
+    # create a buffer around the reference shoreline and reshape it into a vector
+    vec_buffer = im_ref_buffer.reshape(nrows * ncols)
+    
     # reshape spectral index image to vector
     vec_ndwi = im_ndwi.reshape(nrows * ncols)
     # keep pixels that are in the buffer and not in the cloud mask
@@ -680,11 +680,8 @@ def find_wl_contours2(im_ms, im_labels, cloud_mask, im_ref_buffer):
     vec_sand = im_labels[:, :, 0].reshape(ncols * nrows)
     vec_water = im_labels[:, :, 2].reshape(ncols * nrows)
 
-    # use im_ref_buffer and dilate it by 5 pixels
-    se = morphology.disk(5)
-    im_ref_buffer_extra = morphology.binary_dilation(im_ref_buffer, se)
-    # create a buffer around the sandy beach
-    vec_buffer = im_ref_buffer_extra.reshape(nrows * ncols)
+    # Make a buffer around the reference shoreline and reshape it into a vector
+    vec_buffer = im_ref_buffer.reshape(nrows * ncols)
 
     # select water/sand pixels that are within the buffer
     int_water = vec_ind[np.logical_and(vec_buffer, vec_water), :]
