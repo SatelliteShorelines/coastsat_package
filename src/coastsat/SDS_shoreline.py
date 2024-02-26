@@ -1104,7 +1104,7 @@ def show_detection(
 
     # create image 1 (RGB)
     ax1.imshow(im_RGB)
-    ax1.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=3)
+    ax1.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
     ax1.axis("off")
     ax1.set_title(sitename, fontweight="bold", fontsize=16)
 
@@ -1120,7 +1120,7 @@ def show_detection(
     ax2.imshow(im_class)
     if masked_array is not None:
         ax2.imshow(masked_array, cmap=masked_cmap, alpha=0.60)
-    ax2.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=3)
+    ax2.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
     ax2.axis("off")
     orange_patch = mpatches.Patch(color=colours[0, :], label="sand")
     white_patch = mpatches.Patch(color=colours[1, :], label="whitewater")
@@ -1140,7 +1140,7 @@ def show_detection(
     ax3.imshow(im_mwi, cmap="bwr")
     if masked_array is not None:
         ax3.imshow(masked_array, cmap=masked_cmap, alpha=0.60)
-    ax3.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=3)
+    ax3.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
     ax3.axis("off")
     ax3.set_title(satname, fontweight="bold", fontsize=16)
 
