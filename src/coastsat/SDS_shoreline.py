@@ -76,6 +76,7 @@ def get_finite_data(data) -> np.ndarray:
 def extract_shorelines(
     metadata,
     settings,
+    output_directory:str=None
 ):
     """
     Main function to extract shorelines from satellite images
@@ -114,6 +115,9 @@ def extract_shorelines(
             if True, no pan-sharpening is performed on Landsat 7,8 and 9 imagery
         's2cloudless_prob': float [0,100)
             threshold to identify cloud pixels in the s2cloudless probability mask            
+    output_directory: str
+        The directory to save the output files. If None, the output files will be saved in the same directory as the input files.
+        
 
     Returns:
     -----------
@@ -135,11 +139,22 @@ def extract_shorelines(
     collection = settings["inputs"]["landsat_collection"]
 
     sitename_location = os.path.join(filepath_data, sitename)
-    logger = setup_logger(
+    # set up logger at the output directory if it is provided otherwise set up logger at the sitename location
+    if output_directory is not None:
+        if not os.path.exists(output_directory):
+            os.makedirs(output_directory)
+        logger = setup_logger(
+            output_directory,
+            "extract_shorelines_report",
+            log_format="%(levelname)s - %(message)s",
+        )
+    else:
+        logger = setup_logger(
         sitename_location,
         "extract_shorelines_report",
         log_format="%(levelname)s - %(message)s",
     )
+        
     logger.info(f"Please read the following information carefully:\n")
     logger.info(
         "find_wl_contours2: A method for extracting shorelines that uses the sand water interface detected with the model to refine the threshold that's used to detect shorelines .\n  - This is the default method used when there are enough sand pixels within the reference shoreline buffer.\n"
@@ -396,6 +411,7 @@ def extract_shorelines(
                         date,
                         satname,
                         im_ref_buffer,
+                        output_directory,
                     )
                     # if the user decides to skip the image, continue and do not save the mapped shoreline
                     if skip_image:
@@ -429,8 +445,14 @@ def extract_shorelines(
     # change the format to have one list sorted by date with all the shorelines (easier to use)
     output = SDS_tools.merge_output(output)
 
-    # save outputput structure as output.json
+    # save putput structure as output.json
+    # don't do this for now
+    # if output_directory is not None:
+    #     filepath = output_directory
+        
     filepath = os.path.join(filepath_data, sitename)
+    if not os.path.exists(filepath):
+        os.makedirs(filepath)
     json_path = os.path.join(filepath, sitename + "_output.json")
     SDS_preprocess.write_to_json(json_path, output)
     # release the logger as it is no longer needed
@@ -984,6 +1006,7 @@ def show_detection(
     date,
     satname,
     im_ref_buffer=None,
+    output_directory:str=None
 ):
     """
     Shows the detected shoreline to the user for visual quality control.
@@ -1021,6 +1044,9 @@ def show_detection(
             if True, saves a -jpg file for each mapped shoreline
     im_ref_buffer
         binary image containing a buffer around the reference shoreline
+    output_directory: str
+        path to the output directory to save the jpg file. If none, the jpg file will be saved at the same location as the input image.
+        The jpg files will be saved at output_directory/jpg_files/detection or if output_directory is None, at filepath/jpg_files/detection
     Returns:
     -----------
     skip_image: boolean
@@ -1030,8 +1056,14 @@ def show_detection(
 
     sitename = settings["inputs"]["sitename"]
     filepath_data = settings["inputs"]["filepath"]
-    # subfolder where the .jpg file is stored if the user accepts the shoreline detection
-    filepath = os.path.join(filepath_data, sitename, "jpg_files", "detection")
+    if output_directory is not None:
+        # subfolder where the .jpg file is stored if the user accepts the shoreline detection
+        filepath = os.path.join(output_directory, "jpg_files", "detection")
+        if not os.path.exists(filepath):
+            os.makedirs(filepath)
+    else:
+        # subfolder where the .jpg file is stored if the user accepts the shoreline detection
+        filepath = os.path.join(filepath_data, sitename, "jpg_files", "detection")
 
     im_RGB = SDS_preprocess.rescale_image_intensity(
         im_ms[:, :, [2, 1, 0]], cloud_mask, 99.9
