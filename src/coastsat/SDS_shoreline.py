@@ -51,6 +51,58 @@ np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
 from coastsat.SDS_download import setup_logger, release_logger
 
+def create_shoreline_buffer_from_polygon(im_shape, georef, image_epsg, output_epsg, polygon):
+    """
+    Creates a buffer around the reference shoreline. The size of the buffer is
+    given by settings['max_dist_ref'].
+
+    KV WRL 2018
+
+    Arguments:
+    -----------
+    im_shape: np.array
+        size of the image (rows,columns)
+    georef: np.array
+        vector of 6 elements [Xtr, Xscale, Xshear, Ytr, Yshear, Yscale]
+    image_epsg: int
+        spatial reference system of the image from which the contours were extracted
+    'output_epsg': int
+        output spatial reference system
+    polygon: np.array
+        coordinates of the reference shoreline buffer
+
+
+    Returns:
+    -----------
+    im_buffer: np.array
+        binary image, True where the buffer is, False otherwise
+
+    """
+    # initialise the image buffer
+    im_buffer = np.ones(im_shape).astype(bool)
+    # convert reference shoreline to pixel coordinates
+    ref_sl_conv = SDS_tools.convert_epsg(
+        polygon, output_epsg, image_epsg
+    )[:, :-1]
+    ref_sl_pix = SDS_tools.convert_world2pix(ref_sl_conv, georef)
+    ref_sl_pix_rounded = np.round(ref_sl_pix).astype(int)
+    # this break the connected polygon may instead connect the polygon where it was removed
+    # # make sure that the pixel coordinates of the reference shoreline are inside the image
+    # idx_row = np.logical_and(
+    #     ref_sl_pix_rounded[:, 0] > 0, ref_sl_pix_rounded[:, 0] < im_shape[1]
+    # )
+    # idx_col = np.logical_and(
+    #     ref_sl_pix_rounded[:, 1] > 0, ref_sl_pix_rounded[:, 1] < im_shape[0]
+    # )
+    # idx_inside = np.logical_and(idx_row, idx_col)
+    # ref_sl_pix_rounded = ref_sl_pix_rounded[idx_inside, :]
+    
+    # create binary image of the reference shoreline (1 where the shoreline is 0 otherwise)
+    im_binary = np.zeros(im_shape)
+    for j in range(len(ref_sl_pix_rounded)):
+        im_binary[ref_sl_pix_rounded[j, 1], ref_sl_pix_rounded[j, 0]] = 1
+    im_binary = im_binary.astype(bool)
+    return im_binary
 
 def get_finite_data(data) -> np.ndarray:
     """
@@ -76,7 +128,7 @@ def get_finite_data(data) -> np.ndarray:
 def extract_shorelines(
     metadata,
     settings,
-    output_directory:str=None
+    output_directory:str=None,
 ):
     """
     Main function to extract shorelines from satellite images
@@ -304,9 +356,10 @@ def extract_shorelines(
             logger.info(f"{satname} {shoreline_date} cloud cover : {cloud_cover:.2%}")
 
             # calculate a buffer around the reference shoreline (if any has been digitised)
-            im_ref_buffer = create_shoreline_buffer(
-                cloud_mask.shape, georef, image_epsg, pixel_size, settings
-            )
+            # im_ref_buffer = create_shoreline_buffer(
+            #     cloud_mask.shape, georef, image_epsg, pixel_size, settings
+            # )
+            im_ref_buffer =create_shoreline_buffer_from_polygon(cloud_mask.shape, georef, image_epsg, settings["output_epsg"], settings['reference_shoreline'])
 
             # classify image in 4 classes (sand, whitewater, water, other) with NN classifier
             im_classif, im_labels = classify_image_NN(
@@ -795,15 +848,15 @@ def create_shoreline_buffer(im_shape, georef, image_epsg, pixel_size, settings):
         ref_sl_pix = SDS_tools.convert_world2pix(ref_sl_conv, georef)
         ref_sl_pix_rounded = np.round(ref_sl_pix).astype(int)
 
-        # make sure that the pixel coordinates of the reference shoreline are inside the image
-        idx_row = np.logical_and(
-            ref_sl_pix_rounded[:, 0] > 0, ref_sl_pix_rounded[:, 0] < im_shape[1]
-        )
-        idx_col = np.logical_and(
-            ref_sl_pix_rounded[:, 1] > 0, ref_sl_pix_rounded[:, 1] < im_shape[0]
-        )
-        idx_inside = np.logical_and(idx_row, idx_col)
-        ref_sl_pix_rounded = ref_sl_pix_rounded[idx_inside, :]
+        # # make sure that the pixel coordinates of the reference shoreline are inside the image
+        # idx_row = np.logical_and(
+        #     ref_sl_pix_rounded[:, 0] > 0, ref_sl_pix_rounded[:, 0] < im_shape[1]
+        # )
+        # idx_col = np.logical_and(
+        #     ref_sl_pix_rounded[:, 1] > 0, ref_sl_pix_rounded[:, 1] < im_shape[0]
+        # )
+        # idx_inside = np.logical_and(idx_row, idx_col)
+        # ref_sl_pix_rounded = ref_sl_pix_rounded[idx_inside, :]
 
         # create binary image of the reference shoreline (1 where the shoreline is 0 otherwise)
         im_binary = np.zeros(im_shape)

@@ -1155,7 +1155,6 @@ def save_jpg(metadata, settings, **kwargs):
         + os.path.join(filepath_data, sitename, "jpg_files", "preprocessed")
     )
 
-
 def get_reference_sl(metadata, settings):
     """
     Allows the user to manually digitize a reference shoreline that is used seed
@@ -1188,146 +1187,108 @@ def get_reference_sl(metadata, settings):
 
     """
 
-    sitename = settings["inputs"]["sitename"]
-    filepath_data = settings["inputs"]["filepath"]
-    collection = settings["inputs"]["landsat_collection"]
+    sitename = settings['inputs']['sitename']
+    filepath_data = settings['inputs']['filepath']
+    collection = settings['inputs']['landsat_collection']
     pts_coords = []
     # check if reference shoreline already exists in the corresponding folder
-    filepath = os.path.join(filepath_data, sitename)
-    filename = sitename + "_reference_shoreline.pkl"
-    # if it exist, load it and return it
-    if filename in os.listdir(filepath):
-        print("Reference shoreline already exists and was loaded")
-        with open(
-            os.path.join(filepath, sitename + "_reference_shoreline.pkl"), "rb"
-        ) as f:
-            refsl = pickle.load(f)
+    fp_ref_shoreline = os.path.join(filepath_data, sitename, sitename + '_reference_shoreline.geojson')
+    # if it exist, load it and load the geojson file
+    if os.path.exists(fp_ref_shoreline):
+        print('Reference shoreline already exists and was loaded')
+        refsl_geojson = gpd.read_file(fp_ref_shoreline,driver='GeoJSON')
+        refsl = np.array(refsl_geojson.iloc[0]['geometry'].coords)
+        print('Reference shoreline coordinates are in epsg:%d'%refsl_geojson.crs.to_epsg())
         return refsl
-    # otherwise get the user to manually digitise a shoreline on
+
+    # otherwise get the user to manually digitise a shoreline on 
     # S2, L8, L9 or L5 images (no L7 because of scan line error)
     # first try to use S2 images (10m res for manually digitizing the reference shoreline)
-    if "S2" in metadata.keys():
-        satname = "S2"
+    if 'S2' in metadata.keys(): satname = 'S2'
     # if no S2 images, use L8 or L9 (15m res in the RGB with pansharpening)
-    elif "L8" in metadata.keys():
-        satname = "L8"
-    elif "L9" in metadata.keys():
-        satname = "L9"
+    elif 'L8' in metadata.keys(): satname = 'L8'
+    elif 'L9' in metadata.keys(): satname = 'L9'
     # if no S2, L8 or L9 use L5 (30m res)
-    elif "L5" in metadata.keys():
-        satname = "L5"
+    elif 'L5' in metadata.keys(): satname = 'L5'
     # if only L7 images, ask user to download other images
     else:
-        raise Exception(
-            "You cannot digitize the shoreline on L7 images (because of gaps in the images), add another L8, S2 or L5 to your dataset."
-        )
-    filepath = SDS_tools.get_filepath(settings["inputs"], satname)
-    filenames = metadata[satname]["filenames"]
-
+        raise Exception('You cannot digitize the shoreline on L7 images (because of gaps in the images), add another L8, S2 or L5 to your dataset.')
+    filepath = SDS_tools.get_filepath(settings['inputs'],satname)
+    filenames = metadata[satname]['filenames']
     # create figure
-    fig, ax = plt.subplots(1, 1, figsize=[18, 9], tight_layout=True)
+    fig, ax = plt.subplots(1,1, figsize=[18,9], tight_layout=True)
     mng = plt.get_current_fig_manager()
+    mng.window.showMaximized()
     # loop trhough the images
     for i in range(len(filenames)):
-        # read image
-        apply_cloud_mask = settings.get("apply_cloud_mask", True)
-        fn = SDS_tools.get_filenames(filenames[i], filepath, satname)
-        im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = preprocess_single(
-            fn,
-            satname,
-            settings["cloud_mask_issue"],
-            settings["pan_off"],
-            collection,
-            apply_cloud_mask,
-            settings.get('s2cloudless_prob',60)
-        )
 
+        # read image
+        fn = SDS_tools.get_filenames(filenames[i],filepath, satname)
+        im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = preprocess_single(fn, satname, settings['cloud_mask_issue'],
+                                                                                  settings['pan_off'], collection,
+                                                                                  settings.get('s2cloudless_prob',.60))
         # compute cloud_cover percentage (with no data pixels)
-        cloud_cover_combined = np.divide(
-            sum(sum(cloud_mask.astype(int))),
-            (cloud_mask.shape[0] * cloud_mask.shape[1]),
-        )
-        if cloud_cover_combined > 0.99:  # if 99% of cloudy pixels in image skip
+        cloud_cover_combined = np.divide(sum(sum(cloud_mask.astype(int))),
+                                (cloud_mask.shape[0]*cloud_mask.shape[1]))
+        if cloud_cover_combined > 0.99: # if 99% of cloudy pixels in image skip
             continue
+
         # remove no data pixels from the cloud mask (for example L7 bands of no data should not be accounted for)
         cloud_mask_adv = np.logical_xor(cloud_mask, im_nodata)
         # compute updated cloud cover percentage (without no data pixels)
-        cloud_cover = np.divide(
-            sum(sum(cloud_mask_adv.astype(int))), (sum(sum((~im_nodata).astype(int))))
-        )
+        cloud_cover = np.divide(sum(sum(cloud_mask_adv.astype(int))),
+                                (sum(sum((~im_nodata).astype(int)))))
+
         # skip image if cloud cover is above threshold
-        if cloud_cover > settings["cloud_thresh"]:
+        if cloud_cover > settings['cloud_thresh']:
             continue
+
         # rescale image intensity for display purposes
-        im_RGB = rescale_image_intensity(im_ms[:, :, [2, 1, 0]], cloud_mask, 99.9)
+        im_RGB = rescale_image_intensity(im_ms[:,:,[2,1,0]], cloud_mask, 99.9)
+
         # plot the image RGB on a figure
-        ax.axis("off")
+        ax.axis('off')
         ax.imshow(im_RGB)
+
         # decide if the image if good enough for digitizing the shoreline
-        ax.set_title(
-            "Press <right arrow> if image is clear enough to digitize the shoreline.\n"
-            + "If the image is cloudy press <left arrow> to get another image",
-            fontsize=14,
-        )
+        ax.set_title('Press <right arrow> if image is clear enough to digitize the shoreline.\n' +
+                  'If the image is cloudy press <left arrow> to get another image', fontsize=14)
         # set a key event to accept/reject the detections (see https://stackoverflow.com/a/15033071)
         # this variable needs to be immuatable so we can access it after the keypress event
         skip_image = False
         key_event = {}
-
         def press(event):
             # store what key was pressed in the dictionary
-            key_event["pressed"] = event.key
-
+            key_event['pressed'] = event.key
         # let the user press a key, right arrow to keep the image, left arrow to skip it
         # to break the loop the user can press 'escape'
         while True:
-            btn_keep = plt.text(
-                1.1,
-                0.9,
-                "keep ⇨",
-                size=12,
-                ha="right",
-                va="top",
-                transform=ax.transAxes,
-                bbox=dict(boxstyle="square", ec="k", fc="w"),
-            )
-            btn_skip = plt.text(
-                -0.1,
-                0.9,
-                "⇦ skip",
-                size=12,
-                ha="left",
-                va="top",
-                transform=ax.transAxes,
-                bbox=dict(boxstyle="square", ec="k", fc="w"),
-            )
-            btn_esc = plt.text(
-                0.5,
-                0,
-                "<esc> to quit",
-                size=12,
-                ha="center",
-                va="top",
-                transform=ax.transAxes,
-                bbox=dict(boxstyle="square", ec="k", fc="w"),
-            )
+            btn_keep = plt.text(1.1, 0.9, 'keep ⇨', size=12, ha="right", va="top",
+                                transform=ax.transAxes,
+                                bbox=dict(boxstyle="square", ec='k',fc='w'))
+            btn_skip = plt.text(-0.1, 0.9, '⇦ skip', size=12, ha="left", va="top",
+                                transform=ax.transAxes,
+                                bbox=dict(boxstyle="square", ec='k',fc='w'))
+            btn_esc = plt.text(0.5, 0, '<esc> to quit', size=12, ha="center", va="top",
+                                transform=ax.transAxes,
+                                bbox=dict(boxstyle="square", ec='k',fc='w'))
             plt.draw()
-            fig.canvas.mpl_connect("key_press_event", press)
+            fig.canvas.mpl_connect('key_press_event', press)
             plt.waitforbuttonpress()
             # after button is pressed, remove the buttons
             btn_skip.remove()
             btn_keep.remove()
             btn_esc.remove()
             # keep/skip image according to the pressed key, 'escape' to break the loop
-            if key_event.get("pressed") == "right":
+            if key_event.get('pressed') == 'right':
                 skip_image = False
                 break
-            elif key_event.get("pressed") == "left":
+            elif key_event.get('pressed') == 'left':
                 skip_image = True
                 break
-            elif key_event.get("pressed") == "escape":
+            elif key_event.get('pressed') == 'escape':
                 plt.close()
-                raise StopIteration("User cancelled checking shoreline detection")
+                raise StopIteration('User cancelled checking shoreline detection')
             else:
                 plt.waitforbuttonpress()
 
@@ -1336,154 +1297,112 @@ def get_reference_sl(metadata, settings):
             continue
         else:
             # create two new buttons
-            add_button = plt.text(
-                0,
-                0.9,
-                "add",
-                size=16,
-                ha="left",
-                va="top",
-                transform=plt.gca().transAxes,
-                bbox=dict(boxstyle="square", ec="k", fc="w"),
-            )
-            end_button = plt.text(
-                1,
-                0.9,
-                "end",
-                size=16,
-                ha="right",
-                va="top",
-                transform=plt.gca().transAxes,
-                bbox=dict(boxstyle="square", ec="k", fc="w"),
-            )
+            add_button = plt.text(0, 0.9, 'add', size=16, ha="left", va="top",
+                                   transform=plt.gca().transAxes,
+                                   bbox=dict(boxstyle="square", ec='k',fc='w'))
+            end_button = plt.text(1, 0.9, 'end', size=16, ha="right", va="top",
+                                   transform=plt.gca().transAxes,
+                                   bbox=dict(boxstyle="square", ec='k',fc='w'))
             # add multiple reference shorelines (until user clicks on <end> button)
-            pts_sl = np.expand_dims(np.array([np.nan, np.nan]), axis=0)
+            pts_sl = np.expand_dims(np.array([np.nan, np.nan]),axis=0)
             geoms = []
             while 1:
                 add_button.set_visible(False)
                 end_button.set_visible(False)
                 # update title (instructions)
-                ax.set_title(
-                    "Click points along the shoreline (enough points to capture the beach curvature).\n"
-                    + "Start at one end of the beach.\n"
-                    + "When finished digitizing, click <ENTER>",
-                    fontsize=14,
-                )
+                ax.set_title('Click points along the shoreline (enough points to capture the beach curvature).\n' +
+                          'Start at one end of the beach.\n' + 'When finished digitizing, click <ENTER>',
+                          fontsize=14)
                 plt.draw()
+
                 # let user click on the shoreline
                 pts = ginput(n=50000, timeout=-1, show_clicks=True)
                 pts_pix = np.array(pts)
+                print(f"pts_pix: {pts_pix}")
                 # convert pixel coordinates to world coordinates
                 pts_world = SDS_tools.convert_pix2world(pts_pix[:,[1,0]], georef)
+
                 # interpolate between points clicked by the user (1m resolution)
-                pts_world_interp = np.expand_dims(np.array([np.nan, np.nan]), axis=0)
-                for k in range(len(pts_world) - 1):
-                    pt_dist = np.linalg.norm(pts_world[k, :] - pts_world[k + 1, :])
-                    xvals = np.arange(0, pt_dist)
+                pts_world_interp = np.expand_dims(np.array([np.nan, np.nan]),axis=0)
+                for k in range(len(pts_world)-1):
+                    pt_dist = np.linalg.norm(pts_world[k,:]-pts_world[k+1,:])
+                    xvals = np.arange(0,pt_dist)
                     yvals = np.zeros(len(xvals))
-                    pt_coords = np.zeros((len(xvals), 2))
-                    pt_coords[:, 0] = xvals
-                    pt_coords[:, 1] = yvals
+                    pt_coords = np.zeros((len(xvals),2))
+                    pt_coords[:,0] = xvals
+                    pt_coords[:,1] = yvals
                     phi = 0
-                    deltax = pts_world[k + 1, 0] - pts_world[k, 0]
-                    deltay = pts_world[k + 1, 1] - pts_world[k, 1]
-                    phi = np.pi / 2 - np.math.atan2(deltax, deltay)
-                    tf = transform.EuclideanTransform(
-                        rotation=phi, translation=pts_world[k, :]
-                    )
-                    pts_world_interp = np.append(
-                        pts_world_interp, tf(pt_coords), axis=0
-                    )
-                pts_world_interp = np.delete(pts_world_interp, 0, axis=0)
+                    deltax = pts_world[k+1,0] - pts_world[k,0]
+                    deltay = pts_world[k+1,1] - pts_world[k,1]
+                    phi = np.pi/2 - np.math.atan2(deltax, deltay)
+                    tf = transform.EuclideanTransform(rotation=phi, translation=pts_world[k,:])
+                    pts_world_interp = np.append(pts_world_interp,tf(pt_coords), axis=0)
+                pts_world_interp = np.delete(pts_world_interp,0,axis=0)
+
                 # save as geometry (to create .geojson file later)
                 geoms.append(geometry.LineString(pts_world_interp))
+
                 # convert to pixel coordinates and plot
                 pts_pix_interp = SDS_tools.convert_world2pix(pts_world_interp, georef)
                 pts_sl = np.append(pts_sl, pts_world_interp, axis=0)
-                ax.plot(pts_pix_interp[:, 0], pts_pix_interp[:, 1], "r--")
-                ax.plot(pts_pix_interp[0, 0], pts_pix_interp[0, 1], "ko")
-                ax.plot(pts_pix_interp[-1, 0], pts_pix_interp[-1, 1], "ko")
+                ax.plot(pts_pix_interp[:,0], pts_pix_interp[:,1], 'r--')
+                ax.plot(pts_pix_interp[0,0], pts_pix_interp[0,1],'ko')
+                ax.plot(pts_pix_interp[-1,0], pts_pix_interp[-1,1],'ko')
+
                 # update title and buttons
                 add_button.set_visible(True)
                 end_button.set_visible(True)
-                ax.set_title(
-                    "click on <add> to digitize another shoreline or on <end> to finish and save the shoreline(s)",
-                    fontsize=14,
-                )
+                ax.set_title('click on <add> to digitize another shoreline or on <end> to finish and save the shoreline(s)',
+                          fontsize=14)
                 plt.draw()
+
                 # let the user click again (<add> another shoreline or <end>)
                 pt_input = ginput(n=1, timeout=-1, show_clicks=False)
                 pt_input = np.array(pt_input)
+
                 # if user clicks on <end>, save the points and break the loop
-                if pt_input[0][0] > im_ms.shape[1] / 2:
+                if pt_input[0][0] > im_ms.shape[1]/2:
                     add_button.set_visible(False)
                     end_button.set_visible(False)
-                    plt.title(
-                        "Reference shoreline saved as "
-                        + sitename
-                        + "_reference_shoreline.pkl and "
-                        + sitename
-                        + "_reference_shoreline.geojson"
-                    )
+                    plt.title('Reference shoreline saved as ' + sitename + '_reference_shoreline.pkl and ' + sitename + '_reference_shoreline.geojson')
                     plt.draw()
                     ginput(n=1, timeout=3, show_clicks=False)
                     plt.close()
                     break
-            pts_sl = np.delete(pts_sl, 0, axis=0)
+
+            pts_sl = np.delete(pts_sl,0,axis=0)
             # convert world image coordinates to user-defined coordinate system
-            image_epsg = metadata[satname]["epsg"][i]
-            pts_coords = SDS_tools.convert_epsg(
-                pts_sl, image_epsg, settings["output_epsg"]
-            )
+            image_epsg = metadata[satname]['epsg'][i]
+            pts_coords = SDS_tools.convert_epsg(pts_sl, image_epsg, settings['output_epsg'])
+
             # save the reference shoreline as .pkl
             filepath = os.path.join(filepath_data, sitename)
-            # save_path = os.path.join(filepath, sitename + "_reference_shoreline.json")
-            # write_to_json(save_path, pts_coords)
-            with open(
-                os.path.join(filepath, sitename + "_reference_shoreline.pkl"), "wb"
-            ) as f:
+            with open(os.path.join(filepath, sitename + '_reference_shoreline.pkl'), 'wb') as f:
                 pickle.dump(pts_coords, f)
 
             # also store as .geojson in case user wants to drag-and-drop on GIS for verification
-            # for k,line in enumerate(geoms):
-            #     gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(line))
-            #     gdf.index = [k]
-            #     gdf.loc[k,'name'] = 'reference shoreline ' + str(k+1)
-            #     # store into geodataframe
-            #     if k == 0:
-            #         gdf_all = gdf
-            #     else:
-            #         gdf_all = gdf_all.append(gdf)
-
-            # initialize an empty list to store the individual GeoDataFrames
-            gdf_list = []
-
-            for k, line in enumerate(geoms):
+            for k,line in enumerate(geoms):
                 gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries(line))
                 gdf.index = [k]
-                gdf.loc[k, "name"] = "reference shoreline " + str(k + 1)
-                gdf_list.append(gdf)
-
-            # concatenate all GeoDataFrames in the list into a single GeoDataFrame
-            gdf_all = pd.concat(gdf_list, ignore_index=True)
-
-            gdf_all.crs = {"init": "epsg:" + str(image_epsg)}
+                gdf.loc[k,'name'] = 'reference shoreline ' + str(k+1)
+                # store into geodataframe
+                if k == 0:
+                    gdf_all = gdf
+                else:
+                    gdf_all = pd.concat([gdf_all, gdf])
+            gdf_all.crs = image_epsg
             # convert from image_epsg to user-defined coordinate system
-            gdf_all = gdf_all.to_crs({"init": "epsg:" + str(settings["output_epsg"])})
+            gdf_all = gdf_all.to_crs(epsg=settings['output_epsg'])
             # save as geojson
-            gdf_all.to_file(
-                os.path.join(filepath, sitename + "_reference_shoreline.geojson"),
-                driver="GeoJSON",
-                encoding="utf-8",
-            )
-            print("Reference shoreline has been saved in " + filepath)
+            gdf_all.to_file(os.path.join(filepath, sitename + '_reference_shoreline.geojson'),
+                            driver='GeoJSON', encoding='utf-8')
+
+            print('Reference shoreline has been saved in ' + filepath)
             break
 
     # check if a shoreline was digitised
     if len(pts_coords) == 0:
-        raise Exception(
-            "No cloud free images are available to digitise the reference shoreline,"
-            + "download more images and try again"
-        )
-
+        raise Exception('No cloud free images are available to digitise the reference shoreline,'+
+                        'download more images and try again')
+    
     return pts_coords
