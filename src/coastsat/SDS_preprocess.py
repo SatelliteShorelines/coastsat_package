@@ -611,7 +611,7 @@ def preprocess_single(
         fn_mask = fn[2]
         im_QA = read_bands(fn_mask)[0]
         if not do_cloud_mask:
-            cloud_mask = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
+            cloud_mask_QA60 = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
             # compute cloud mask using s2cloudless probability band
             cloud_mask_s2cloudless = create_s2cloudless_mask(cloud_prob, s2cloudless_prob)
             # combine both cloud masks
