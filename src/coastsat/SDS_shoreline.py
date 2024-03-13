@@ -150,8 +150,8 @@ def extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, 
             cloud_cover,
             0,
             "lines",
-            crs = f"epsg:{image_epsg}",
-        )
+            crs = f"epsg:{output_epsg}", 
+        )# originally was the image_epsg
         shoreline_gdf.reset_index(drop=True, inplace=True)
 
         # Filter shorelines within the extraction area.
@@ -251,9 +251,7 @@ def ref_poly_filter(ref_poly_gdf:gpd.GeoDataFrame, raw_shorelines_gdf:gpd.GeoDat
     Returns:
         GeoDataFrame: A filtered GeoDataFrame containing shorelines that are within the reference polygon.
     """
-    print(f"Raw Shorelines: {raw_shorelines_gdf}")
     if ref_poly_gdf.empty:
-        print(f"Reference Polygon is empty")
         return raw_shorelines_gdf
     
     ##First need to get rid of lines that are completely outside of the ref polygon
@@ -269,7 +267,6 @@ def ref_poly_filter(ref_poly_gdf:gpd.GeoDataFrame, raw_shorelines_gdf:gpd.GeoDat
     raw_shorelines_gdf['buffer_vals'] = buffer_vals
     # filter out lines that are not within the buffer
     shorelines_gdf_filter = raw_shorelines_gdf[raw_shorelines_gdf['buffer_vals']]
-    print(f"shorelines_gdf_filter: {shorelines_gdf_filter}")
 
     ##Now get rid of points that lie outside ref polygon but preserve the rest of the shoreline
     new_lines = [None]*len(shorelines_gdf_filter)
@@ -405,7 +402,6 @@ def extract_shorelines(
         # get images
         filepath = SDS_tools.get_filepath(settings["inputs"], satname)
         filenames = metadata[satname]["filenames"]
-        print(f"filenames: {filenames}")
 
         # initialise the output variables
         output_timestamp = []  # datetime at which the image was acquired (UTC time)
@@ -475,7 +471,6 @@ def extract_shorelines(
         for i in tqdm(
             range(len(filenames)), desc=f"{satname}: Mapping Shorelines", leave=True, position=0
         ):
-            # print('\r%s:   %d%%' % (satname,int(((i+1)/len(filenames))*100)), end='')
             apply_cloud_mask = settings.get("apply_cloud_mask", True)
             # get image filename
             fn = SDS_tools.get_filenames(filenames[i], filepath, satname)
@@ -620,7 +615,7 @@ def extract_shorelines(
                 )
                 # filter shorelines
                 shoreline, shoreline_extraction_area_array = extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, metadata[satname]["dates"][i], metadata[satname]["acc_georef"][i], cloud_cover, output_epsg, image_epsg)
-
+                print(f"Image crs is {image_epsg} and output crs is {output_epsg}")
                 # visualise the mapped shorelines, there are two options:
                 # if settings['check_detection'] = True, shows the detection to the user for accept/reject
                 # if settings['save_figure'] = True, saves a figure for each mapped shoreline
@@ -1340,25 +1335,9 @@ def show_detection(
     if shoreline_extraction_area is not None:
         shoreline_extraction_area_pix  = []
         for idx in range(len(shoreline_extraction_area)):
-            print(f"shoreline_extraction_area {idx}: {shoreline_extraction_area[idx]}")
             shoreline_extraction_area_pix.append(
                 SDS_preprocess.bind_image_size(shoreline_extraction_area[idx, :],cloud_mask.shape,settings["output_epsg"], georef, image_epsg)
             )
-            print(f"shoreline_extraction_area_pix {idx}: {shoreline_extraction_area_pix}")      
-    # if shoreline_extraction_area is not None:
-    #     shoreline_extraction_area_pix = []
-    #     for idx in range(len(shoreline_extraction_area)):
-    #         shoreline_extraction_area_pix.append(
-    #             SDS_tools.convert_world2pix(
-    #                 SDS_tools.convert_epsg(
-    #                     shoreline_extraction_area[idx, :], image_epsg, image_epsg
-    #                 )[:, [0, 1]],
-    #                 georef,
-    #             )
-    #         ) 
-    #     shoreline_extraction_area_pix = np.array(shoreline_extraction_area_pix)  
-
-
     if plt.get_fignums():
         # get open figure if it exists
         fig = plt.gcf()

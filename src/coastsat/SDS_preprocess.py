@@ -56,13 +56,11 @@ def bind_image_size(array: np.ndarray, im_shape: tuple, input_epsg: int, georef:
     # Convert array to pixel coordinates
     ref_sl_conv = SDS_tools.convert_epsg(array, input_epsg, output_epsg)[:, :-1]
     pixel_coords = SDS_tools.convert_world2pix(ref_sl_conv, georef)
-    rounded_array = np.round(pixel_coords).astype(int)
-    
-    # Clamp the pixel coordinates of the reference shoreline to be inside or on the edge of the image
-    rounded_array[:, 0] = np.clip(rounded_array[:, 0], 0, im_shape[1] - 1)
-    rounded_array[:, 1] = np.clip(rounded_array[:, 1], 0, im_shape[0] - 1)
 
-    return rounded_array
+    pixel_coords[:, 0] = np.clip(pixel_coords[:, 0], 0, im_shape[1] - 1)
+    pixel_coords[:, 1] = np.clip(pixel_coords[:, 1], 0, im_shape[0] - 1)
+
+    return pixel_coords
 
 # def bind_image_size(array:np.ndarray, im_shape:tuple, input_epsg:int, georef:list, image_epsg:int):
 #     """
