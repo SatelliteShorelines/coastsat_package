@@ -38,6 +38,62 @@ from coastsat import SDS_tools
 
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
+def bind_image_size(array: np.ndarray, im_shape: tuple, input_epsg: int, georef: list, output_epsg: int):
+    """
+    Binds the image size to the reference shoreline coordinates, adjusting coordinates outside the image
+    to the nearest edge within the image boundaries.
+
+    Args:
+        array (numpy.ndarray): The reference shoreline coordinates.
+        im_shape (tuple): The shape of the image.
+        input_epsg (int): The EPSG code of the input coordinates.
+        georef (geopandas.GeoDataFrame): The georeferencing information.
+        output_epsg (int): The EPSG code of the image.
+
+    Returns:
+        numpy.ndarray: The adjusted reference shoreline coordinates inside or on the edge of the image.
+    """
+    # Convert array to pixel coordinates
+    ref_sl_conv = SDS_tools.convert_epsg(array, input_epsg, output_epsg)[:, :-1]
+    pixel_coords = SDS_tools.convert_world2pix(ref_sl_conv, georef)
+    rounded_array = np.round(pixel_coords).astype(int)
+    
+    # Clamp the pixel coordinates of the reference shoreline to be inside or on the edge of the image
+    rounded_array[:, 0] = np.clip(rounded_array[:, 0], 0, im_shape[1] - 1)
+    rounded_array[:, 1] = np.clip(rounded_array[:, 1], 0, im_shape[0] - 1)
+
+    return rounded_array
+
+# def bind_image_size(array:np.ndarray, im_shape:tuple, input_epsg:int, georef:list, image_epsg:int):
+#     """
+#     Binds the image size to the reference shoreline coordinates.
+
+#     Args:
+#         array (numpy.ndarray): The reference shoreline coordinates.
+#         im_shape (tuple): The shape of the image.
+#         input_epsg (int): The EPSG code of the input coordinates.
+#         georef (geopandas.GeoDataFrame): The georeferencing information.
+#         image_epsg (int): The EPSG code of the image.
+
+#     Returns:
+#         numpy.ndarray: The rounded reference shoreline coordinates inside the image.
+#     """
+#     # convert array to pixel coordinates
+#     ref_sl_conv = SDS_tools.convert_epsg(
+#         array, input_epsg, image_epsg
+#     )[:, :-1]
+#     pixel_coords = SDS_tools.convert_world2pix(ref_sl_conv, georef)
+#     rounded_array = np.round(pixel_coords).astype(int)
+#     # make sure that the pixel coordinates of the reference shoreline are inside the image
+#     idx_row = np.logical_and(
+#         rounded_array[:, 0] > 0, rounded_array[:, 0] < im_shape[1]
+#     )
+#     idx_col = np.logical_and(
+#         rounded_array[:, 1] > 0, rounded_array[:, 1] < im_shape[0]
+#     )
+#     idx_inside = np.logical_and(idx_row, idx_col)
+#     rounded_array = rounded_array[idx_inside, :]
+#     return rounded_array
 
 def find_edge_padding(im_band: np.ndarray) -> np.ndarray:
     """

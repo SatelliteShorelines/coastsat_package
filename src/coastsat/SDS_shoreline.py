@@ -36,6 +36,10 @@ from datetime import datetime
 from pylab import ginput
 import importlib
 
+import shapely
+from shapely import geometry
+import geopandas as gpd
+
 # from tqdm import tqdm
 from tqdm.auto import tqdm
 
@@ -51,6 +55,115 @@ np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
 from coastsat.SDS_download import setup_logger, release_logger
 
+def arr_to_LineString(coords):
+    """
+    Makes a line feature from a list of xy tuples
+    inputs: coords
+    outputs: line
+    """
+    points = [None]*len(coords)
+    i=0
+    for xy in coords:
+        points[i] = shapely.geometry.Point(xy)
+        i=i+1
+    line = shapely.geometry.LineString(points)
+    return line
+
+def LineString_to_arr(line):
+    """
+    Makes an array from linestring
+    inputs: line
+    outputs: array of xy tuples
+    """
+    listarray = []
+    for pp in line.coords:
+        listarray.append(pp)
+    nparray = np.array(listarray)
+    return nparray
+
+def convert_gdf_to_array(gdf: gpd.GeoDataFrame) -> np.ndarray:
+    """
+    Convert a GeoDataFrame to a NumPy array.
+
+    Args:
+        gdf (gpd.GeoDataFrame): The GeoDataFrame to be converted.
+
+    Returns:
+        np.ndarray: The converted NumPy array.
+
+    Note:
+        This function will not work for multi-geometries like multi-polygons.
+    """
+    new_array = []
+    # for each geometry in the gdf, convert it to an array
+    for idx in range(len(gdf)):
+        array = np.array(gdf.iloc[idx].geometry.exterior.coords)
+        new_array.append(array)
+    new_array = np.array(new_array)
+    return new_array
+
+def convert_shoreline_to_array(gdf) -> np.ndarray:
+    """
+    Convert filtered shoreline GeoDataFrame to a numpy array.
+
+    Parameters:
+    gdf (GeoDataFrame): The filtered shoreline GeoDataFrame.
+
+    Returns:
+    np.ndarray: The numpy array representation of the shoreline coordinates.
+    """
+    if gdf.empty:
+        return np.array([])
+    else:
+        x_array, y_array = gdf.geometry.iloc[0].coords.xy
+        return np.transpose(np.array([np.array(list(x_array)), np.array(list(y_array))]))
+
+def extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, sl_data,acc_georef, cloud_cover, output_epsg, image_epsg):
+    """Extract and filter the shoreline based on the extraction area.
+
+    Args:
+        shoreline_extraction_area (GeoDataFrame): The area to extract the shoreline from.
+        shoreline (array): The original shoreline data.
+        metadata (dict): Metadata associated with the satellite imagery.
+        satname (str): Name of the satellite.
+        i (int): Index for the current iteration.
+        cloud_cover (float): Cloud cover percentage.
+        output_epsg (int): EPSG code for the output coordinate reference system.
+        image_epsg (int): EPSG code for the image coordinate reference system.
+
+    Returns:
+        np.array: The filtered shoreline as a numpy array of shape (n,2).
+        np.array: The shoreline extraction area as a numpy array of shape (n,2).
+    """
+    shoreline_extraction_area_array = []
+
+    if shoreline_extraction_area is not None:
+        # Ensure both the shoreline and extraction area are in the same CRS.
+        shoreline_extraction_area_gdf = shoreline_extraction_area.to_crs(f"epsg:{output_epsg}")
+
+        # Convert the shoreline to a GeoDataFrame.
+        shoreline_gdf = create_gdf(
+            shoreline,
+            sl_data,
+            satname,
+            acc_georef,
+            cloud_cover,
+            0,
+            "lines",
+            crs = f"epsg:{image_epsg}",
+        )
+        shoreline_gdf.reset_index(drop=True, inplace=True)
+
+        # Filter shorelines within the extraction area.
+        filtered_shoreline_gdf = ref_poly_filter(shoreline_extraction_area_gdf, shoreline_gdf)
+
+        # Convert the filtered shoreline back to a numpy array.
+        shoreline = convert_shoreline_to_array(filtered_shoreline_gdf, )
+
+        # Convert the extraction area into a numpy array.
+        shoreline_extraction_area_array = convert_gdf_to_array(shoreline_extraction_area_gdf)
+
+    return shoreline, shoreline_extraction_area_array
 
 def get_finite_data(data) -> np.ndarray:
     """
@@ -71,12 +184,124 @@ def get_finite_data(data) -> np.ndarray:
         raise ValueError("no valid pixels found in reference shoreline buffer.")
     return valid_data
 
+from typing import List, Union
+from coastsat.SDS_tools import create_geometry   
+
+def create_gdf(
+    shoreline: List[List[float]],
+    date: datetime,
+    satname: str,
+    geoaccuracy: Union[float, str],
+    cloud_cover: float,
+    idx: int,
+    geomtype: str,
+    crs: str = None,
+) :
+    """
+    Creates a GeoDataFrame for a given shoreline and its attributes.
+
+    Parameters:
+    -----------
+    shoreline: List[List[float]]
+        List of shoreline coordinates.
+    date: datetime
+        Date associated with the shoreline.
+    satname: str
+        Satellite name.
+    geoaccuracy: float or string
+        Geo accuracy value, can be float for landsat or PASSED/FAILED for S2
+    cloud_cover: float
+        Cloud cover value.
+    idx: int
+        Index for the GeoDataFrame.
+    geomtype: str
+        Type of geometry ('lines' or 'points').
+
+    Returns:
+    --------
+    Optional[gpd.GeoDataFrame]
+        The created GeoDataFrame or None if invalid.
+    """
+    geom = create_geometry(geomtype, shoreline)
+    if geom:
+        # Creating a GeoDataFrame directly with all attributes
+        data = {
+            "date": [date.strftime("%Y-%m-%d %H:%M:%S")],
+            "satname": [satname],
+            "geoaccuracy": [geoaccuracy],
+            "cloud_cover": [cloud_cover],
+        }
+        gdf = gpd.GeoDataFrame(data, geometry=[geom], index=[idx])
+        if crs:
+            gdf.crs = crs
+        return gdf
+
+    return None
+
+
+def ref_poly_filter(ref_poly_gdf:gpd.GeoDataFrame, raw_shorelines_gdf:gpd.GeoDataFrame)->gpd.GeoDataFrame:
+    """
+    Filters shorelines that are within a reference polygon.
+    filters extracted shorelines that are not contained within a reference region/polygon
+
+    Args:
+        ref_poly_gdf (GeoDataFrame): A GeoDataFrame representing the reference polygon.
+        raw_shorelines_gdf (GeoDataFrame): A GeoDataFrame representing the raw shorelines.
+
+    Returns:
+        GeoDataFrame: A filtered GeoDataFrame containing shorelines that are within the reference polygon.
+    """
+    print(f"Raw Shorelines: {raw_shorelines_gdf}")
+    if ref_poly_gdf.empty:
+        print(f"Reference Polygon is empty")
+        return raw_shorelines_gdf
+    
+    ##First need to get rid of lines that are completely outside of the ref polygon
+    ref_polygon = ref_poly_gdf.geometry
+    buffer_vals = [None]*len(raw_shorelines_gdf)
+    for i in range(len(raw_shorelines_gdf)):
+        line_entry = raw_shorelines_gdf.iloc[i]
+        line = line_entry.geometry
+        # if any of the polygons intersect with the line, then it is within the buffer
+        bool_val = np.any(ref_polygon.intersects(line).values)
+        buffer_vals[i] = bool_val
+    # add whether the line is within the buffer to the GeoDataFrame
+    raw_shorelines_gdf['buffer_vals'] = buffer_vals
+    # filter out lines that are not within the buffer
+    shorelines_gdf_filter = raw_shorelines_gdf[raw_shorelines_gdf['buffer_vals']]
+    print(f"shorelines_gdf_filter: {shorelines_gdf_filter}")
+
+    ##Now get rid of points that lie outside ref polygon but preserve the rest of the shoreline
+    new_lines = [None]*len(shorelines_gdf_filter)
+    for i in range(len(shorelines_gdf_filter)):
+        line_entry = shorelines_gdf_filter.iloc[i]
+        line = line_entry.geometry
+        line_arr = LineString_to_arr(line)
+        bool_vals = [None]*len(line_arr)
+        j = 0
+        for point in line_arr:
+            point = geometry.Point(point)
+            contains_series = ref_polygon.contains(point)
+            # if the point is within any of the polygons, then it is within the buffer
+            bool_val = contains_series.any()
+            bool_vals[j] = bool_val
+            j=j+1
+        new_line_arr = line_arr[bool_vals]
+        new_line_LineString = arr_to_LineString(new_line_arr)
+        new_lines[i] = new_line_LineString
+
+    ##Assign the new geometries, save the output
+    shorelines_gdf_filter['geometry'] = new_lines
+    shorelines_gdf_filter = shorelines_gdf_filter.drop(columns=['buffer_vals'])
+
+    return shorelines_gdf_filter
 
 # Main function for batch shoreline detection
 def extract_shorelines(
     metadata,
     settings,
-    output_directory:str=None
+    output_directory:str=None,
+    shoreline_extraction_area: gpd.GeoDataFrame = None,
 ):
     """
     Main function to extract shorelines from satellite images
@@ -173,13 +398,14 @@ def extract_shorelines(
         os.makedirs(filepath_jpg)
     # close all open figures
     plt.close("all")
-
+    output_epsg = settings["output_epsg"]
     default_min_length_sl = settings["min_length_sl"]
     # loop through satellite list
     for satname in metadata.keys():
         # get images
         filepath = SDS_tools.get_filepath(settings["inputs"], satname)
         filenames = metadata[satname]["filenames"]
+        print(f"filenames: {filenames}")
 
         # initialise the output variables
         output_timestamp = []  # datetime at which the image was acquired (UTC time)
@@ -382,7 +608,7 @@ def extract_shorelines(
                     )
                     continue
 
-                # process the water contours into a shoreline
+                # process the water contours into a shoreline (shorelines are in the epsg of the image)
                 shoreline = process_shoreline(
                     contours_mwi,
                     cloud_mask_adv,
@@ -392,6 +618,8 @@ def extract_shorelines(
                     settings,
                     logger=logger,
                 )
+                # filter shorelines
+                shoreline, shoreline_extraction_area_array = extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, metadata[satname]["dates"][i], metadata[satname]["acc_georef"][i], cloud_cover, output_epsg, image_epsg)
 
                 # visualise the mapped shorelines, there are two options:
                 # if settings['check_detection'] = True, shows the detection to the user for accept/reject
@@ -399,7 +627,7 @@ def extract_shorelines(
                 if settings["check_detection"] or settings["save_figure"]:
                     date = filenames[i][:19]
                     if not settings["check_detection"]:
-                        plt.ioff()  # turning interactive plotting off
+                        plt.ioff()  # turning interactive plotting off 
                     skip_image = show_detection(
                         im_ms,
                         cloud_mask,
@@ -412,6 +640,7 @@ def extract_shorelines(
                         satname,
                         im_ref_buffer,
                         output_directory,
+                        shoreline_extraction_area_array,
                     )
                     # if the user decides to skip the image, continue and do not save the mapped shoreline
                     if skip_image:
@@ -1006,7 +1235,8 @@ def show_detection(
     date,
     satname,
     im_ref_buffer=None,
-    output_directory:str=None
+    output_directory:str=None,
+    shoreline_extraction_area:np.ndarray=None,
 ):
     """
     Shows the detected shoreline to the user for visual quality control.
@@ -1064,6 +1294,9 @@ def show_detection(
     else:
         # subfolder where the .jpg file is stored if the user accepts the shoreline detection
         filepath = os.path.join(filepath_data, sitename, "jpg_files", "detection")
+        
+        if not os.path.exists(filepath):
+            os.makedirs(filepath)
 
     im_RGB = SDS_preprocess.rescale_image_intensity(
         im_ms[:, :, [2, 1, 0]], cloud_mask, 99.9
@@ -1097,6 +1330,34 @@ def show_detection(
     except:
         # if try fails, just add nan into the shoreline vector so the next parts can still run
         sl_pix = np.array([[np.nan, np.nan], [np.nan, np.nan]])
+        
+    shoreline_extraction_area_pix = np.array([[np.nan, np.nan], [np.nan, np.nan]])
+    shoreline_extraction_area_pix  = []
+    if shoreline_extraction_area is not None:
+        if len(shoreline_extraction_area) == 0:
+            shoreline_extraction_area = None
+            
+    if shoreline_extraction_area is not None:
+        shoreline_extraction_area_pix  = []
+        for idx in range(len(shoreline_extraction_area)):
+            print(f"shoreline_extraction_area {idx}: {shoreline_extraction_area[idx]}")
+            shoreline_extraction_area_pix.append(
+                SDS_preprocess.bind_image_size(shoreline_extraction_area[idx, :],cloud_mask.shape,settings["output_epsg"], georef, image_epsg)
+            )
+            print(f"shoreline_extraction_area_pix {idx}: {shoreline_extraction_area_pix}")      
+    # if shoreline_extraction_area is not None:
+    #     shoreline_extraction_area_pix = []
+    #     for idx in range(len(shoreline_extraction_area)):
+    #         shoreline_extraction_area_pix.append(
+    #             SDS_tools.convert_world2pix(
+    #                 SDS_tools.convert_epsg(
+    #                     shoreline_extraction_area[idx, :], image_epsg, image_epsg
+    #                 )[:, [0, 1]],
+    #                 georef,
+    #             )
+    #         ) 
+    #     shoreline_extraction_area_pix = np.array(shoreline_extraction_area_pix)  
+
 
     if plt.get_fignums():
         # get open figure if it exists
@@ -1134,6 +1395,8 @@ def show_detection(
     # create image 1 (RGB)
     ax1.imshow(im_RGB)
     ax1.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
+    for idx in range(len(shoreline_extraction_area_pix)):
+        ax1.plot(shoreline_extraction_area_pix[idx][:, 0], shoreline_extraction_area_pix[idx][:, 1], color='#cb42f5', markersize=1)
     ax1.axis("off")
     ax1.set_title(sitename, fontweight="bold", fontsize=16)
 
@@ -1150,6 +1413,8 @@ def show_detection(
     if masked_array is not None:
         ax2.imshow(masked_array, cmap=masked_cmap, alpha=0.60)
     ax2.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
+    for idx in range(len(shoreline_extraction_area_pix)):
+        ax2.plot(shoreline_extraction_area_pix[idx][:, 0], shoreline_extraction_area_pix[idx][:, 1], color='#cb42f5', markersize=1)
     ax2.axis("off")
     orange_patch = mpatches.Patch(color=colours[0, :], label="sand")
     white_patch = mpatches.Patch(color=colours[1, :], label="whitewater")
@@ -1158,11 +1423,19 @@ def show_detection(
     buffer_patch = mpatches.Patch(
         color="#800000", alpha=0.80, label="Reference shoreline buffer"
     )
-    ax2.legend(
-        handles=[orange_patch, white_patch, blue_patch, black_line, buffer_patch],
-        bbox_to_anchor=(1, 0.5),
-        fontsize=10,
-    )
+    if shoreline_extraction_area is not None:
+        shoreline_extraction_area_line = mlines.Line2D([], [], color="#cb42f5", linestyle="-", label="shoreline")
+        ax2.legend(
+            handles=[orange_patch, white_patch, blue_patch, black_line,shoreline_extraction_area_line, buffer_patch],
+            bbox_to_anchor=(1, 0.5),
+            fontsize=10,
+        )
+    else:
+        ax2.legend(
+            handles=[orange_patch, white_patch, blue_patch, black_line, buffer_patch],
+            bbox_to_anchor=(1, 0.5),
+            fontsize=10,
+        )
     ax2.set_title(date, fontweight="bold", fontsize=16)
 
     # create image 3 (MNDWI)
@@ -1170,6 +1443,8 @@ def show_detection(
     if masked_array is not None:
         ax3.imshow(masked_array, cmap=masked_cmap, alpha=0.60)
     ax3.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
+    for idx in range(len(shoreline_extraction_area_pix)):
+        ax3.plot(shoreline_extraction_area_pix[idx][:, 0], shoreline_extraction_area_pix[idx][:, 1], color='#cb42f5', markersize=1)
     ax3.axis("off")
     ax3.set_title(satname, fontweight="bold", fontsize=16)
 
