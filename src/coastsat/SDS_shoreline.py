@@ -330,9 +330,10 @@ def extract_shorelines(
             if True, no pan-sharpening is performed on Landsat 7,8 and 9 imagery
         's2cloudless_prob': float [0,100)
             threshold to identify cloud pixels in the s2cloudless probability mask            
-    output_directory: str
+    output_directory: str (default: None)
         The directory to save the output files. If None, the output files will be saved in the same directory as the input files.
-        
+    shoreline_extraction_area: gpd.GeoDataFrame (default: None)
+        A geodataframe containing polygons indicating the areas to extract the shoreline from. Any shoreline outside of these polygons will be discarded.  
 
     Returns:
     -----------
