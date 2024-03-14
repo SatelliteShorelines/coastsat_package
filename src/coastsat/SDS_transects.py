@@ -338,6 +338,15 @@ def compute_intersection_QC(output, transects, settings, use_progress_bar: bool 
         for i in range(len(shorelines)):
             sl = shorelines[i]
 
+            # in case there are no shoreline points
+            if len(sl) == 0:
+                std_intersect[i] = np.nan
+                med_intersect[i] = np.nan
+                max_intersect[i] = np.nan
+                min_intersect[i] = np.nan
+                n_intersect[i] = np.nan
+                continue
+
             # compute rotation matrix
             X0 = transects[key][0, 0]
             Y0 = transects[key][0, 1]
