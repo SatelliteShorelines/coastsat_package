@@ -159,6 +159,7 @@ def extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, 
 
     if shoreline_extraction_area is not None:
         # Ensure both the shoreline and extraction area are in the same CRS.
+
         shoreline_extraction_area_gdf = shoreline_extraction_area.to_crs(f"epsg:{output_epsg}")
         
 
@@ -175,6 +176,7 @@ def extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, 
         )# originally was the image_epsg
         shoreline_gdf.reset_index(drop=True, inplace=True)
 
+
         # Filter shorelines within the extraction area.(unclipped version)
         filtered_shoreline_gdf = ref_poly_filter(shoreline_extraction_area_gdf, shoreline_gdf)
 
@@ -183,14 +185,14 @@ def extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, 
 
         # Convert the clipped extraction area into a numpy array(used later to plot the extraction area on the detection figure)
         # clip the shoreline extraction area to the region of interest
-        if not roi_gdf.empty:
-            print(f"shoreline_extraction_area_gdf.crs is {shoreline_extraction_area_gdf.crs} and roi_gdf.crs is {roi_gdf.crs}")
-            clipped_shoreline_extraction_area_gdf = shoreline_extraction_area_gdf.clip(roi_gdf)
-            clipped_shoreline_extraction_area_gdf.to_file( "_clipped_shoreline_extraction_area.geojson", driver="GeoJSON")
-            if not clipped_shoreline_extraction_area_gdf.empty:
-                shoreline_extraction_area_array = convert_gdf_to_array(clipped_shoreline_extraction_area_gdf)
-        # else:
-        #     shoreline_extraction_area_array = convert_gdf_to_array(clipped_shoreline_extraction_area_gdf)
+        if roi_gdf.empty:
+            raise ValueError("Region of interest is empty. Cannot clip shoreline extraction area.")
+        
+        roi_gdf = roi_gdf.to_crs(f"epsg:{output_epsg}")
+        clipped_shoreline_extraction_area_gdf = shoreline_extraction_area_gdf.clip(roi_gdf)
+    
+        if not clipped_shoreline_extraction_area_gdf.empty:
+            shoreline_extraction_area_array = convert_gdf_to_array(clipped_shoreline_extraction_area_gdf)
             
 
     return shoreline, shoreline_extraction_area_array
@@ -645,15 +647,15 @@ def extract_shorelines(
                 )
                 
                 # convert the polygon coordinates of ROI to gdf
-                roi_coords =  settings['inputs']['polygon']
-                roi_gdf = SDS_preprocess.convert_coords_to_gdf(roi_coords, 4326)
-                roi_gdf.to_crs(output_epsg,inplace=True)
-                print(f"ROI crs is {roi_gdf.crs}")
-                roi_gdf.to_file(os.path.join(filepath_data, sitename, sitename + "_roi.geojson"), driver="GeoJSON")
+                height,width=im_ms.shape[:2]
+                output_epsg = settings["output_epsg"]
+                date = filenames[i][:19]
+                roi_gdf = SDS_preprocess.convert_img_bounds_to_gdf(height,width, georef,image_epsg,output_epsg)
+                
                 # filter shorelines within the extraction area
                 shoreline, shoreline_extraction_area_array = extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, metadata[satname]["dates"][i], metadata[satname]["acc_georef"][i], cloud_cover, output_epsg,roi_gdf)
-                print(f"Image crs is {image_epsg} and output crs is {output_epsg}")
-                # visualise the mapped shorelines, there are two options:
+                
+                # visualize the mapped shorelines, there are two options:
                 # if settings['check_detection'] = True, shows the detection to the user for accept/reject
                 # if settings['save_figure'] = True, saves a figure for each mapped shoreline
                 if settings["check_detection"] or settings["save_figure"]:
@@ -697,7 +699,6 @@ def extract_shorelines(
             "idx": output_idxkeep,
             "MNDWI_threshold": output_t_mndwi,
         }
-        # print('')
 
     # close figure window if still open
     if plt.get_fignums():
@@ -1153,7 +1154,6 @@ def process_shoreline(
 
     """
     logger = kwargs.get("logger", None)
-
     # convert pixel coordinates to world coordinates
     contours_world = SDS_tools.convert_pix2world(contours, georef)
     # convert world coordinates to desired spatial reference system
@@ -1442,10 +1442,10 @@ def show_detection(
     blue_patch = mpatches.Patch(color=colours[2, :], label="water")
     black_line = mlines.Line2D([], [], color="k", linestyle="-", label="shoreline")
     buffer_patch = mpatches.Patch(
-        color="#800000", alpha=0.80, label="Reference shoreline buffer"
+        color="#800000", alpha=0.80, label="reference shoreline buffer"
     )
     if shoreline_extraction_area is not None:
-        shoreline_extraction_area_line = mlines.Line2D([], [], color="#cb42f5", linestyle="-", label="shoreline")
+        shoreline_extraction_area_line = mlines.Line2D([], [], color="#cb42f5", linestyle="-", label="shoreline extraction area")
         ax2.legend(
             handles=[orange_patch, white_patch, blue_patch, black_line,shoreline_extraction_area_line, buffer_patch],
             bbox_to_anchor=(1, 0.5),

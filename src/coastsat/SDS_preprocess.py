@@ -40,6 +40,27 @@ from coastsat import SDS_tools
 
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
+def convert_img_bounds_to_gdf(height,width, georef,image_epsg,output_epsg):
+    rectangle_coords = [(0, 0), (0, width), (height, width),(height, 0),(0, 0),]
+    points = np.array(rectangle_coords)
+    # convert pixel coordinates to world coordinates
+    world_img = SDS_tools.convert_pix2world(points, georef)
+    image_bounds_in_epsg = SDS_tools.convert_epsg(
+        world_img, image_epsg, output_epsg
+        
+    )
+    # drop the z coordinate
+    image_bounds_in_epsg = image_bounds_in_epsg[:, :2]
+    # Reverse the order of each point
+    if output_epsg == 4326 or output_epsg == 4327:
+        image_bounds_in_epsg = image_bounds_in_epsg[:, ::-1]
+    # create a geodataframe
+    gdf = gpd.GeoDataFrame(
+        {"geometry": [Polygon(image_bounds_in_epsg)]},
+        crs=output_epsg,
+    )
+    return gdf
+
 def convert_coords_to_gdf(coords: np.ndarray, epsg: int) -> gpd.GeoDataFrame:
     """
     Converts pixel coordinates to a GeoDataFrame with the same coordinates in the reference system.
