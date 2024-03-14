@@ -81,15 +81,36 @@ def LineString_to_arr(line):
     nparray = np.array(listarray)
     return nparray
 
-def convert_gdf_to_array(gdf: gpd.GeoDataFrame) -> np.ndarray:
+# def convert_gdf_to_array(gdf: gpd.GeoDataFrame) -> np.ndarray:
+#     """
+#     Convert a GeoDataFrame to a NumPy array.
+
+#     Args:
+#         gdf (gpd.GeoDataFrame): The GeoDataFrame to be converted.
+
+#     Returns:
+#         np.ndarray: The converted NumPy array.
+
+#     Note:
+#         This function will not work for multi-geometries like multi-polygons.
+#     """
+#     new_array = []
+#     # for each geometry in the gdf, convert it to an array
+#     for idx in range(len(gdf)):
+#         array = np.array(gdf.iloc[idx].geometry.exterior.coords)
+#         new_array.append(array)
+#     new_array = np.array(new_array)
+#     return new_array
+
+def convert_gdf_to_array(gdf: gpd.GeoDataFrame) -> list:
     """
-    Convert a GeoDataFrame to a NumPy array.
+    Convert a GeoDataFrame to a list of NumPy arrays.
 
     Args:
         gdf (gpd.GeoDataFrame): The GeoDataFrame to be converted.
 
     Returns:
-        np.ndarray: The converted NumPy array.
+        list: The converted list of NumPy arrays.
 
     Note:
         This function will not work for multi-geometries like multi-polygons.
@@ -99,7 +120,6 @@ def convert_gdf_to_array(gdf: gpd.GeoDataFrame) -> np.ndarray:
     for idx in range(len(gdf)):
         array = np.array(gdf.iloc[idx].geometry.exterior.coords)
         new_array.append(array)
-    new_array = np.array(new_array)
     return new_array
 
 def convert_shoreline_to_array(gdf) -> np.ndarray:
@@ -118,7 +138,7 @@ def convert_shoreline_to_array(gdf) -> np.ndarray:
         x_array, y_array = gdf.geometry.iloc[0].coords.xy
         return np.transpose(np.array([np.array(list(x_array)), np.array(list(y_array))]))
 
-def extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, sl_data,acc_georef, cloud_cover, output_epsg, image_epsg):
+def extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, sl_data,acc_georef, cloud_cover, output_epsg,roi_gdf):
     """Extract and filter the shoreline based on the extraction area.
 
     Args:
@@ -129,7 +149,7 @@ def extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, 
         i (int): Index for the current iteration.
         cloud_cover (float): Cloud cover percentage.
         output_epsg (int): EPSG code for the output coordinate reference system.
-        image_epsg (int): EPSG code for the image coordinate reference system.
+        roi_gdf (GeoDataFrame): The region of interest polygon.
 
     Returns:
         np.array: The filtered shoreline as a numpy array of shape (n,2).
@@ -140,6 +160,7 @@ def extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, 
     if shoreline_extraction_area is not None:
         # Ensure both the shoreline and extraction area are in the same CRS.
         shoreline_extraction_area_gdf = shoreline_extraction_area.to_crs(f"epsg:{output_epsg}")
+        
 
         # Convert the shoreline to a GeoDataFrame.
         shoreline_gdf = create_gdf(
@@ -154,14 +175,23 @@ def extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, 
         )# originally was the image_epsg
         shoreline_gdf.reset_index(drop=True, inplace=True)
 
-        # Filter shorelines within the extraction area.
+        # Filter shorelines within the extraction area.(unclipped version)
         filtered_shoreline_gdf = ref_poly_filter(shoreline_extraction_area_gdf, shoreline_gdf)
 
         # Convert the filtered shoreline back to a numpy array.
         shoreline = convert_shoreline_to_array(filtered_shoreline_gdf, )
 
-        # Convert the extraction area into a numpy array.
-        shoreline_extraction_area_array = convert_gdf_to_array(shoreline_extraction_area_gdf)
+        # Convert the clipped extraction area into a numpy array(used later to plot the extraction area on the detection figure)
+        # clip the shoreline extraction area to the region of interest
+        if not roi_gdf.empty:
+            print(f"shoreline_extraction_area_gdf.crs is {shoreline_extraction_area_gdf.crs} and roi_gdf.crs is {roi_gdf.crs}")
+            clipped_shoreline_extraction_area_gdf = shoreline_extraction_area_gdf.clip(roi_gdf)
+            clipped_shoreline_extraction_area_gdf.to_file( "_clipped_shoreline_extraction_area.geojson", driver="GeoJSON")
+            if not clipped_shoreline_extraction_area_gdf.empty:
+                shoreline_extraction_area_array = convert_gdf_to_array(clipped_shoreline_extraction_area_gdf)
+        # else:
+        #     shoreline_extraction_area_array = convert_gdf_to_array(clipped_shoreline_extraction_area_gdf)
+            
 
     return shoreline, shoreline_extraction_area_array
 
@@ -613,8 +643,15 @@ def extract_shorelines(
                     settings,
                     logger=logger,
                 )
-                # filter shorelines
-                shoreline, shoreline_extraction_area_array = extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, metadata[satname]["dates"][i], metadata[satname]["acc_georef"][i], cloud_cover, output_epsg, image_epsg)
+                
+                # convert the polygon coordinates of ROI to gdf
+                roi_coords =  settings['inputs']['polygon']
+                roi_gdf = SDS_preprocess.convert_coords_to_gdf(roi_coords, 4326)
+                roi_gdf.to_crs(output_epsg,inplace=True)
+                print(f"ROI crs is {roi_gdf.crs}")
+                roi_gdf.to_file(os.path.join(filepath_data, sitename, sitename + "_roi.geojson"), driver="GeoJSON")
+                # filter shorelines within the extraction area
+                shoreline, shoreline_extraction_area_array = extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, metadata[satname]["dates"][i], metadata[satname]["acc_georef"][i], cloud_cover, output_epsg,roi_gdf)
                 print(f"Image crs is {image_epsg} and output crs is {output_epsg}")
                 # visualise the mapped shorelines, there are two options:
                 # if settings['check_detection'] = True, shows the detection to the user for accept/reject
@@ -1336,8 +1373,12 @@ def show_detection(
         shoreline_extraction_area_pix  = []
         for idx in range(len(shoreline_extraction_area)):
             shoreline_extraction_area_pix.append(
-                SDS_preprocess.bind_image_size(shoreline_extraction_area[idx, :],cloud_mask.shape,settings["output_epsg"], georef, image_epsg)
+                SDS_preprocess.bind_image_size(shoreline_extraction_area[idx],cloud_mask.shape,settings["output_epsg"], georef, image_epsg)
             )
+            # shoreline_extraction_area_pix.append(
+            #     SDS_preprocess.bind_image_size(shoreline_extraction_area[idx, :],cloud_mask.shape,settings["output_epsg"], georef, image_epsg)
+            # )
+
     if plt.get_fignums():
         # get open figure if it exists
         fig = plt.gcf()
@@ -1371,7 +1412,8 @@ def show_detection(
     im_RGB = np.where(np.isnan(im_RGB), nan_color, im_RGB)
     im_class = np.where(np.isnan(im_class), 1.0, im_class)
 
-    # create image 1 (RGB)
+
+
     ax1.imshow(im_RGB)
     ax1.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
     for idx in range(len(shoreline_extraction_area_pix)):

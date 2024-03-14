@@ -31,12 +31,38 @@ import pickle
 import geopandas as gpd
 from shapely import geometry
 import re
+from shapely.geometry import Polygon
 import logging
 
 # CoastSat modules
 from coastsat import SDS_tools
 
+
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
+
+def convert_coords_to_gdf(coords: np.ndarray, epsg: int) -> gpd.GeoDataFrame:
+    """
+    Converts pixel coordinates to a GeoDataFrame with the same coordinates in the reference system.
+
+    Parameters:
+    - coords (np.ndarray): A 2D array containing the pixel coordinates.
+    - georef (list): A list containing the georeferencing information.
+    - epsg (int): The EPSG code of the reference system.
+
+    Returns:
+    - gpd.GeoDataFrame: A GeoDataFrame containing the pixel coordinates in the reference system.
+    """
+
+    # Convert the polygon coordinates to a valid geometry object
+    shapely_polygon = Polygon(coords[0])
+
+    # Create a GeoDataFrame with the converted polygon
+    gdf = gpd.GeoDataFrame(geometry=[shapely_polygon], crs=epsg)
+
+    # Convert the coordinates to the reference system
+    gdf = gdf.to_crs(epsg=epsg)
+
+    return gdf
 
 def bind_image_size(array: np.ndarray, im_shape: tuple, input_epsg: int, georef: list, output_epsg: int):
     """
@@ -57,8 +83,8 @@ def bind_image_size(array: np.ndarray, im_shape: tuple, input_epsg: int, georef:
     ref_sl_conv = SDS_tools.convert_epsg(array, input_epsg, output_epsg)[:, :-1]
     pixel_coords = SDS_tools.convert_world2pix(ref_sl_conv, georef)
 
-    pixel_coords[:, 0] = np.clip(pixel_coords[:, 0], 0, im_shape[1] - 1)
-    pixel_coords[:, 1] = np.clip(pixel_coords[:, 1], 0, im_shape[0] - 1)
+    # pixel_coords[:, 0] = np.clip(pixel_coords[:, 0], 0, im_shape[1] - 1)
+    # pixel_coords[:, 1] = np.clip(pixel_coords[:, 1], 0, im_shape[0] - 1)
 
     return pixel_coords
 
