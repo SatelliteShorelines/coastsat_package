@@ -5,55 +5,38 @@ shorelines (SDS)
 Author: Kilian Vos, Water Research Laboratory, University of New South Wales
 """
 
-# load modules
+# standard library imports
+import datetime
 import os
-import numpy as np
-import matplotlib.pyplot as plt
 import pdb
 import traceback
+from typing import List, Union
 
-# image processing modules
-import skimage.filters as filters
-import skimage.measure as measure
-import skimage.morphology as morphology
-
-# machine learning modules
-import sklearn
-
-if sklearn.__version__[:4] == "0.20":
-    from sklearn.externals import joblib
-else:
-    import joblib
-from shapely.geometry import LineString
-
-# other modules
-import matplotlib.patches as mpatches
-import matplotlib.lines as mlines
-import matplotlib.cm as cm
-from matplotlib import gridspec
-import pickle
-from datetime import datetime
-from pylab import ginput
-import importlib
-
-import shapely
-from shapely import geometry
+# related third party imports
 import geopandas as gpd
-
-# from tqdm import tqdm
+import joblib
+import matplotlib.cm as cm
+import matplotlib.lines as mlines
+import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
+import numpy as np
+import shapely
+import sklearn
+from matplotlib import gridspec
+from pylab import ginput
+from shapely import geometry
+from shapely.geometry import LineString
+from skimage import filters, measure, morphology
 from tqdm.auto import tqdm
 
-# CoastSat modules
-from coastsat import SDS_tools, SDS_preprocess
+# local application/library specific imports
+from coastsat import SDS_preprocess, SDS_tools
+from coastsat.SDS_tools import create_geometry
+from coastsat.SDS_download import release_logger, setup_logger
+from coastsat.classification import models, training_data, training_sites
 
-# from coastsat import classification
-from coastsat.classification import models
-from coastsat.classification import training_data
-from coastsat.classification import training_sites
-
+# set numpy error handling
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
-
-from coastsat.SDS_download import setup_logger, release_logger
 
 def arr_to_LineString(coords):
     """
@@ -81,26 +64,6 @@ def LineString_to_arr(line):
     nparray = np.array(listarray)
     return nparray
 
-# def convert_gdf_to_array(gdf: gpd.GeoDataFrame) -> np.ndarray:
-#     """
-#     Convert a GeoDataFrame to a NumPy array.
-
-#     Args:
-#         gdf (gpd.GeoDataFrame): The GeoDataFrame to be converted.
-
-#     Returns:
-#         np.ndarray: The converted NumPy array.
-
-#     Note:
-#         This function will not work for multi-geometries like multi-polygons.
-#     """
-#     new_array = []
-#     # for each geometry in the gdf, convert it to an array
-#     for idx in range(len(gdf)):
-#         array = np.array(gdf.iloc[idx].geometry.exterior.coords)
-#         new_array.append(array)
-#     new_array = np.array(new_array)
-#     return new_array
 
 def convert_gdf_to_array(gdf: gpd.GeoDataFrame) -> list:
     """
@@ -216,8 +179,6 @@ def get_finite_data(data) -> np.ndarray:
         raise ValueError("no valid pixels found in reference shoreline buffer.")
     return valid_data
 
-from typing import List, Union
-from coastsat.SDS_tools import create_geometry   
 
 def create_gdf(
     shoreline: List[List[float]],
@@ -650,7 +611,7 @@ def extract_shorelines(
                 height,width=im_ms.shape[:2]
                 output_epsg = settings["output_epsg"]
                 date = filenames[i][:19]
-                roi_gdf = SDS_preprocess.convert_img_bounds_to_gdf(height,width, georef,image_epsg,output_epsg)
+                roi_gdf = SDS_preprocess.create_gdf_from_image_extent(height,width, georef,image_epsg,output_epsg)
                 
                 # filter shorelines within the extraction area
                 shoreline, shoreline_extraction_area_array = extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, metadata[satname]["dates"][i], metadata[satname]["acc_georef"][i], cloud_cover, output_epsg,roi_gdf)
@@ -1373,11 +1334,8 @@ def show_detection(
         shoreline_extraction_area_pix  = []
         for idx in range(len(shoreline_extraction_area)):
             shoreline_extraction_area_pix.append(
-                SDS_preprocess.bind_image_size(shoreline_extraction_area[idx],cloud_mask.shape,settings["output_epsg"], georef, image_epsg)
+                SDS_preprocess.transform_world_coords_to_pixel_coords(shoreline_extraction_area[idx],settings["output_epsg"], georef, image_epsg)
             )
-            # shoreline_extraction_area_pix.append(
-            #     SDS_preprocess.bind_image_size(shoreline_extraction_area[idx, :],cloud_mask.shape,settings["output_epsg"], georef, image_epsg)
-            # )
 
     if plt.get_fignums():
         # get open figure if it exists

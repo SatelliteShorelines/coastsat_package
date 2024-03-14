@@ -31,7 +31,7 @@ import pdb
 ###################################################################################################
 
 
-def convert_pix2world(points, georef):
+def convert_pix2world(points:np.array, georef:np.array):
     """
     Converts pixel coordinates (pixel row and column) to world projected
     coordinates performing an affine transformation.
@@ -489,7 +489,11 @@ def get_filenames(filename, filepath, satname):
     filename: str
         name of the downloaded satellite image as found in the metadata
     filepath: str or list of str
-        contains the filepath(s) to the folder(s) containing the satellite images
+        contains the filepath(s) to the folder(s) containing the satellite images.
+        A three part list containing the filepaths to the different bands of the image.
+        For Landsat 5, it would be [fp_ms, fp_mask]
+        For Landsat 7, 8 and 9, it would be [fp_ms, fp_pan, fp_mask]
+        For Sentinel 2, it would be [fp_ms, fp_swir, fp_mask]
     satname: str
         short name of the satellite mission
 

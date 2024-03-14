@@ -40,15 +40,26 @@ from coastsat import SDS_tools
 
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
-def convert_img_bounds_to_gdf(height,width, georef,image_epsg,output_epsg):
-    rectangle_coords = [(0, 0), (0, width), (height, width),(height, 0),(0, 0),]
+def create_gdf_from_image_extent(height:int, width:int, georef:np.array, image_epsg:int, output_epsg:int)->gpd.GeoDataFrame:
+    """
+    Create a GeoDataFrame containing a polygon from the extent of an image.
+
+    Args:
+        height (int): The height of the image in pixels.
+        width (int): The width of the image in pixels.
+        georef (np.array): vector of 6 elements [Xtr, Xscale, Xshear, Ytr, Yshear, Yscale]
+        image_epsg (int): The EPSG code of the image's coordinate reference system.
+        output_epsg (int): The EPSG code of the desired output coordinate reference system.
+
+    Returns:
+        gdf (GeoDataFrame): A GeoDataFrame representing the extent of the image.
+
+    """
+    rectangle_coords = [(0, 0), (0, width), (height, width), (height, 0), (0, 0)]
     points = np.array(rectangle_coords)
     # convert pixel coordinates to world coordinates
     world_img = SDS_tools.convert_pix2world(points, georef)
-    image_bounds_in_epsg = SDS_tools.convert_epsg(
-        world_img, image_epsg, output_epsg
-        
-    )
+    image_bounds_in_epsg = SDS_tools.convert_epsg(world_img, image_epsg, output_epsg)
     # drop the z coordinate
     image_bounds_in_epsg = image_bounds_in_epsg[:, :2]
     # Reverse the order of each point
@@ -94,7 +105,7 @@ def bind_image_size(array: np.ndarray, im_shape: tuple, input_epsg: int, georef:
         array (numpy.ndarray): The reference shoreline coordinates.
         im_shape (tuple): The shape of the image.
         input_epsg (int): The EPSG code of the input coordinates.
-        georef (geopandas.GeoDataFrame): The georeferencing information.
+        georef (np.array): vector of 6 elements [Xtr, Xscale, Xshear, Ytr, Yshear, Yscale]
         output_epsg (int): The EPSG code of the image.
 
     Returns:
@@ -104,41 +115,31 @@ def bind_image_size(array: np.ndarray, im_shape: tuple, input_epsg: int, georef:
     ref_sl_conv = SDS_tools.convert_epsg(array, input_epsg, output_epsg)[:, :-1]
     pixel_coords = SDS_tools.convert_world2pix(ref_sl_conv, georef)
 
-    # pixel_coords[:, 0] = np.clip(pixel_coords[:, 0], 0, im_shape[1] - 1)
-    # pixel_coords[:, 1] = np.clip(pixel_coords[:, 1], 0, im_shape[0] - 1)
+    pixel_coords[:, 0] = np.clip(pixel_coords[:, 0], 0, im_shape[1] - 1)
+    pixel_coords[:, 1] = np.clip(pixel_coords[:, 1], 0, im_shape[0] - 1)
 
     return pixel_coords
 
-# def bind_image_size(array:np.ndarray, im_shape:tuple, input_epsg:int, georef:list, image_epsg:int):
-#     """
-#     Binds the image size to the reference shoreline coordinates.
 
-#     Args:
-#         array (numpy.ndarray): The reference shoreline coordinates.
-#         im_shape (tuple): The shape of the image.
-#         input_epsg (int): The EPSG code of the input coordinates.
-#         georef (geopandas.GeoDataFrame): The georeferencing information.
-#         image_epsg (int): The EPSG code of the image.
+def transform_world_coords_to_pixel_coords(array: np.ndarray, input_epsg: int, georef: np.array, output_epsg: int)->np.array:
+    """
+    Transforms world coordinates to pixel coordinates.
 
-#     Returns:
-#         numpy.ndarray: The rounded reference shoreline coordinates inside the image.
-#     """
-#     # convert array to pixel coordinates
-#     ref_sl_conv = SDS_tools.convert_epsg(
-#         array, input_epsg, image_epsg
-#     )[:, :-1]
-#     pixel_coords = SDS_tools.convert_world2pix(ref_sl_conv, georef)
-#     rounded_array = np.round(pixel_coords).astype(int)
-#     # make sure that the pixel coordinates of the reference shoreline are inside the image
-#     idx_row = np.logical_and(
-#         rounded_array[:, 0] > 0, rounded_array[:, 0] < im_shape[1]
-#     )
-#     idx_col = np.logical_and(
-#         rounded_array[:, 1] > 0, rounded_array[:, 1] < im_shape[0]
-#     )
-#     idx_inside = np.logical_and(idx_row, idx_col)
-#     rounded_array = rounded_array[idx_inside, :]
-#     return rounded_array
+    Args:
+        array (np.ndarray): The input array containing world coordinates.
+        input_epsg (int): The EPSG code of the input coordinate system.
+        georef (np.array): vector of 6 elements [Xtr, Xscale, Xshear, Ytr, Yshear, Yscale]
+        output_epsg (int): The EPSG code of the output coordinate system.
+
+    Returns:
+        np.ndarray: The pixel coordinates corresponding to the input world coordinates.
+    """
+    # Convert array to pixel coordinates
+    ref_sl_conv = SDS_tools.convert_epsg(array, input_epsg, output_epsg)[:, :-1]
+    pixel_coords = SDS_tools.convert_world2pix(ref_sl_conv, georef)
+
+    return pixel_coords
+
 
 def find_edge_padding(im_band: np.ndarray) -> np.ndarray:
     """
