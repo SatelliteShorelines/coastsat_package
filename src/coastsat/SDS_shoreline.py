@@ -156,7 +156,7 @@ def filter_shoreline(shoreline, satname, sl_date, acc_georef, cloud_cover, outpu
             crs=f"epsg:{output_epsg}",
         )
         if shoreline_gdf is None:
-            return np.array(shoreline)
+            return shoreline
         shoreline_gdf.reset_index(drop=True, inplace=True)
 
         # Filter shorelines within the extraction area.
