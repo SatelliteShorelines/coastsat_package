@@ -125,16 +125,12 @@ def get_extract_shoreline_extraction_area_array(shoreline_extraction_area:gpd.Ge
 
     return shoreline_extraction_area_array
 
-def filter_shoreline(shoreline, satname, sl_date, acc_georef, cloud_cover, output_epsg, shoreline_extraction_area):
+def filter_shoreline(shoreline,shoreline_extraction_area, output_epsg,):
     """Filter the shoreline based on the extraction area.
 
     Args:
         shoreline (array): The original shoreline data.
-        satname (str): Name of the satellite.
-        sl_date (GeoDataFrame): the date of the satellite image.
-        acc_georef (float): Accuracy of georeferencing.
-        cloud_cover (float): Cloud cover percentage.
-        output_epsg (int): EPSG code for the output coordinate reference system.
+        shoreline_extraction_area (GeoDataFrame): The area to extract the shoreline from.
         shoreline_extraction_area (GeoDataFrame): The area to extract the shoreline from.
 
     Returns:
@@ -145,19 +141,9 @@ def filter_shoreline(shoreline, satname, sl_date, acc_georef, cloud_cover, outpu
         shoreline_extraction_area_gdf = shoreline_extraction_area.to_crs(f"epsg:{output_epsg}")
 
         # Convert the shoreline to a GeoDataFrame.
-        shoreline_gdf = create_gdf(
-            shoreline,
-            sl_date,
-            satname,
-            acc_georef,
-            cloud_cover,
-            0,
-            "lines",
-            crs=f"epsg:{output_epsg}",
-        )
+        shoreline_gdf = create_gdf_from_type(shoreline,"lines",crs=f"epsg:{output_epsg}",)
         if shoreline_gdf is None:
             return shoreline
-        shoreline_gdf.reset_index(drop=True, inplace=True)
 
         # Filter shorelines within the extraction area.
         filtered_shoreline_gdf = ref_poly_filter(shoreline_extraction_area_gdf, shoreline_gdf)
@@ -299,6 +285,38 @@ def create_gdf(
         return gdf
 
     return None
+
+
+def create_gdf_from_type(
+    shoreline: List[List[float]],
+    geomtype: str,
+    crs: str = None,
+) :
+    """
+    Creates a GeoDataFrame for a given shoreline and its attributes.
+
+    Parameters:
+    -----------
+    shoreline: List[List[float]]
+        List of shoreline coordinates.
+    geomtype: str
+        Type of geometry ('lines' or 'points').
+
+    Returns:
+    --------
+    Optional[gpd.GeoDataFrame]
+        The created GeoDataFrame or None if invalid.
+    """
+    geom = create_geometry(geomtype, shoreline)
+    if geom:
+        # Creating a GeoDataFrame directly with all attributes
+        gdf = gpd.GeoDataFrame(geometry=[geom],)
+        if crs:
+            gdf.crs = crs
+        return gdf
+
+    return None
+
 
 
 def ref_poly_filter(ref_poly_gdf:gpd.GeoDataFrame, raw_shorelines_gdf:gpd.GeoDataFrame)->gpd.GeoDataFrame:
@@ -684,7 +702,7 @@ def extract_shorelines(
                 roi_gdf = SDS_preprocess.create_gdf_from_image_extent(height,width, georef,image_epsg,output_epsg)
                 
                 # filter shorelines within the extraction area
-                shoreline = filter_shoreline( shoreline, satname, metadata[satname]["dates"][i], metadata[satname]["acc_georef"][i], cloud_cover, output_epsg,shoreline_extraction_area)
+                shoreline = filter_shoreline( shoreline,shoreline_extraction_area,output_epsg)
                 shoreline_extraction_area_array = get_extract_shoreline_extraction_area_array(shoreline_extraction_area, output_epsg, roi_gdf)
                 
                 # visualize the mapped shorelines, there are two options:
@@ -1341,6 +1359,8 @@ def show_detection(
     output_directory: str
         path to the output directory to save the jpg file. If none, the jpg file will be saved at the same location as the input image.
         The jpg files will be saved at output_directory/jpg_files/detection or if output_directory is None, at filepath/jpg_files/detection
+    
+    
     Returns:
     -----------
     skip_image: boolean
