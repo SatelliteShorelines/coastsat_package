@@ -100,45 +100,6 @@ class RequestSizeExceededError(Exception):
 class TooManyRequests(Exception):
     pass
 
-
-# def retry_deprecated(func):
-#     @wraps(func)
-#     def wrapper(*args, **kwargs):
-#         max_tries = 3
-#         # Get image_id from kwargs or use 'Unknown'
-#         image_id = kwargs.get("image_id", "Unknown image id")
-#         logger = kwargs.get("logger", None)
-#         delay = 1
-#         # attempt to download the image up to max_tries times
-#         for tries in range(max_tries):
-#             try:
-#                 print(f"calling {func.__name__}")
-#                 return func(*args, **kwargs)
-#             except Exception as e:
-#                 print(print("CLASS", type(e)))
-#                 if logger:
-#                     logger.warning(
-#                         f"Retry {tries + 1}/{max_tries} for function {func.__name__} with image_id {kwargs.get('image_id', 'N/A')} due to {e}"
-#                     )
-#                 if tries + 1 < max_tries:
-#                     # wait with exponential backoff
-#                     print(
-#                         f"Retry {tries + 1}/{max_tries} for function {func.__name__} with image_id {kwargs.get('image_id', 'N/A')} due to {type(e).__name__} error."
-#                     )
-#                     time.sleep(delay)
-#                     # delay_multiplier *= backoff
-#                 else:
-#                     # Re-raise the last exception if max retries have been exceeded )(i.e. no more retries)
-#                     print(
-#                         f"Max retries {tries + 1}/{max_tries}  exceeded for {func.__name__} due to {type(e).__name__}"
-#                     )
-#                     raise TooManyRequests(
-#                         f"Failed to process {image_id} after {max_tries} attempts due to: {e}"
-#                     )
-
-#     return wrapper
-
-
 import functools  # retry v2
 
 
@@ -176,6 +137,125 @@ def debug_kill_wifi():
     import os
 
     os.system("netsh wlan disconnect")
+
+
+def filter_images_by_month(im_list, satname, months_list,**kwargs):
+    """
+    Removes from the EE collection very cloudy images (>95% cloud cover)
+
+    KV WRL 2018
+
+    Arguments:
+    -----------
+    im_list: list
+        list of images in the collection
+    satname:
+        name of the satellite mission
+    prc_cloud_cover: int
+        percentage of cloud cover acceptable on the images
+
+    Returns:
+    -----------
+    im_list_upt: list
+        updated list of images
+    """
+    # remove very cloudy images from the collection (>95% cloud)
+    if satname in ["L5", "L7", "L8", "L9"]:
+        property_name = "DATE_ACQUIRED"
+    elif satname in ["S2"]:
+        property_name = "DATE_ACQUIRED"
+    # get the properties of the images
+    img_properties = [_["properties"][property_name] for _ in im_list]
+    img_months = [datetime.strptime(img["properties"][property_name], '%Y-%m-%d').month for img in im_list]
+    if np.any([img_month not in months_list for img_month in img_months]):
+        # drop all the images that are not in the months_list
+        idx_delete = np.where([datetime.strptime(date_acquired,'%Y-%m-%d').month not in months_list for date_acquired in img_properties])[0]
+        im_list_upt = [x for k, x in enumerate(im_list) if k not in idx_delete]
+    else:
+        im_list_upt = im_list
+
+    return im_list_upt
+
+
+@retry  # Apply the retry decorator to the function
+def get_image_info(collection, satname, polygon, dates, prc_cloud_cover:int=95,**kwargs):
+    """
+    Reads info about EE images for the specified collection, satellite, and dates
+
+    KV WRL 2022
+
+    Arguments:
+    -----------
+    collection: str
+        name of the collection (e.g. 'LANDSAT/LC08/C02/T1_TOA')
+    satname: str
+        name of the satellite mission
+    polygon: list
+        coordinates of the polygon in lat/lon
+    dates: list of str
+        start and end dates (e.g. '2022-01-01')
+
+    Returns:
+    -----------
+    im_list: list of ee.Image objects
+        list with the info for the images
+    """
+    # get info about images
+    ee_col = ee.ImageCollection(collection)
+    # Initialize the collection with filterBounds and filterDate
+    col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(
+        dates[0], dates[1]
+    )
+    # col = filter_by_months(col, kwargs.get("months_list", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]))
+    # If "S2tile" key is in kwargs and its associated value is truthy (not an empty string, None, etc.),
+    # then apply an additional filter to the collection.
+    if kwargs.get("S2tile"):
+        col = col.filterMetadata("MGRS_TILE", "equals", kwargs["S2tile"])  # 58GGP
+        print(f"Only keeping user-defined S2tile: {kwargs['S2tile']}")
+    im_list = col.getInfo().get("features")
+    # remove very cloudy images (>95% cloud cover)
+    # prc_cloud_cover = kwargs.get("prc_cloud_cover", 95)
+    print(f"prc_cloud_cover: {prc_cloud_cover}")
+    im_list = remove_cloudy_images(im_list, satname,prc_cloud_cover = prc_cloud_cover,**kwargs)
+    im_list = filter_images_by_month(im_list, satname, kwargs.get("months_list", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,12,]))
+    return im_list
+
+# def retry_deprecated(func):
+#     @wraps(func)
+#     def wrapper(*args, **kwargs):
+#         max_tries = 3
+#         # Get image_id from kwargs or use 'Unknown'
+#         image_id = kwargs.get("image_id", "Unknown image id")
+#         logger = kwargs.get("logger", None)
+#         delay = 1
+#         # attempt to download the image up to max_tries times
+#         for tries in range(max_tries):
+#             try:
+#                 print(f"calling {func.__name__}")
+#                 return func(*args, **kwargs)
+#             except Exception as e:
+#                 print(print("CLASS", type(e)))
+#                 if logger:
+#                     logger.warning(
+#                         f"Retry {tries + 1}/{max_tries} for function {func.__name__} with image_id {kwargs.get('image_id', 'N/A')} due to {e}"
+#                     )
+#                 if tries + 1 < max_tries:
+#                     # wait with exponential backoff
+#                     print(
+#                         f"Retry {tries + 1}/{max_tries} for function {func.__name__} with image_id {kwargs.get('image_id', 'N/A')} due to {type(e).__name__} error."
+#                     )
+#                     time.sleep(delay)
+#                     # delay_multiplier *= backoff
+#                 else:
+#                     # Re-raise the last exception if max retries have been exceeded )(i.e. no more retries)
+#                     print(
+#                         f"Max retries {tries + 1}/{max_tries}  exceeded for {func.__name__} due to {type(e).__name__}"
+#                     )
+#                     raise TooManyRequests(
+#                         f"Failed to process {image_id} after {max_tries} attempts due to: {e}"
+#                     )
+
+#     return wrapper
 
 
 @retry
@@ -345,6 +425,8 @@ def retrieve_images(
     cloud_mask_issue: bool = False,
     save_jpg: bool = True,
     apply_cloud_mask: bool = True,
+    months_list:list=None,
+    prc_cloud_cover=95,
 ):
     """
     Downloads all images from Landsat 5, Landsat 7, Landsat 8, Landsat 9 and Sentinel-2
@@ -401,7 +483,8 @@ def retrieve_images(
     ee.Initialize()
 
     # check image availabiliy and retrieve list of images
-    im_dict_T1, im_dict_T2 = check_images_available(inputs)
+    im_dict_T1, im_dict_T2 = check_images_available(inputs,months_list,prc_cloud_cover)
+    # im_dict_T1, im_dict_T2 = check_images_available(inputs)
 
     # merge the two image collections tiers into a single dictionary
     im_dict_T1 = merge_image_tiers(inputs, im_dict_T1, im_dict_T2)
@@ -1170,7 +1253,8 @@ def remove_existing_imagery(image_dict:dict, metadata:dict,sat_list:list[str])->
 
     return image_dict
 
-def check_images_available(inputs):
+
+def check_images_available(inputs,months_list=None,prc_cloud_cover=95):
     """
     Scan the GEE collections to see how many images are available for each
      satellite mission (L5,L7,L8,L9,S2), collection (C01,C02) and tier (T1,T2).
@@ -1189,7 +1273,11 @@ def check_images_available(inputs):
      im_dict_T2: list of dict
          list of images in Tier 2 (Landsat only)
     """
-
+    print(f"months_list: {months_list}")
+    print(f"prc_cloud_cover: {prc_cloud_cover}")
+    if not months_list:
+        months_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,12,]
+    print(f"months_list: {months_list}")
     dates = [datetime.strptime(_, "%Y-%m-%d") for _ in inputs["dates"]]
     dates_str = inputs["dates"]
     polygon = inputs["polygon"]
@@ -1222,13 +1310,7 @@ def check_images_available(inputs):
     sum_img = 0
     # gets the list of images for each satellite mission
     for satname in inputs["sat_list"]:
-        im_list = get_image_info(
-            col_names_T1[satname],
-            satname,
-            polygon,
-            dates_str,
-            S2tile=inputs.get("S2tile", ""),
-        )
+        im_list=get_image_info(col_names_T1[satname], satname, polygon, dates,S2tile=inputs.get("S2tile", ""), prc_cloud_cover=prc_cloud_cover,months_list= months_list)
         # S2 contains many duplicates images so filter collection to only keep images with same UTM Zone projection
         if satname == "S2":
             im_list = filter_S2_collection(im_list)
@@ -1249,25 +1331,13 @@ def check_images_available(inputs):
             # L7 and L8 have images in both C01 and C02, so complete each list with the other collection
             if satname not in ["L7", "L8"]:
                 continue
-            im_list = get_image_info(
-                col_names_C02[satname], satname, polygon, dates_C02
-            )
+            # im_list = get_image_info(
+            #     col_names_C02[satname], satname, polygon, dates_C02
+            # )
+            im_list=get_image_info(col_names_C02[satname], satname, polygon, dates_C02,S2tile=inputs.get("S2tile", ""), prc_cloud_cover=prc_cloud_cover,months_list= months_list)
             sum_img = sum_img + len(im_list)
             print("     %s: %d images" % (satname, len(im_list)))
             im_dict_T1[satname] += im_list
-
-    print("  Total to download: %d images" % sum_img)
-    
-    
-    # if the directory already exists, remove the images that already exist
-    filepath = os.path.join(inputs['filepath'],inputs['sitename'])
-    if os.path.exists(filepath):
-        # get the metadata and satellites that need to be filtered
-        sat_list = inputs["sat_list"]
-        metadata = get_metadata(inputs)
-        # remove any images that already exist from im_dict_T1 because they've already been downloaded
-        im_dict_T1 = remove_existing_imagery(im_dict_T1, metadata,sat_list)
-
     # if only S2 is in sat_list, stop here as no Tier 2 for Sentinel
     if len(inputs["sat_list"]) == 1 and inputs["sat_list"][0] == "S2":
         return im_dict_T1, []
@@ -1285,7 +1355,8 @@ def check_images_available(inputs):
     for satname in inputs["sat_list"]:
         if satname in ["L9", "S2"]:
             continue  # no Tier 2 for Sentinel-2 and Landsat 9
-        im_list = get_image_info(col_names_T2[satname], satname, polygon, dates_str)
+        # im_list = get_image_info(col_names_T2[satname], satname, polygon, dates_str)
+        im_list=get_image_info(col_names_T2[satname], satname, polygon, dates_C02,S2tile=inputs.get("S2tile", ""), prc_cloud_cover=prc_cloud_cover,months_list= months_list)
         sum_img = sum_img + len(im_list)
         print("     %s: %d images" % (satname, len(im_list)))
         im_dict_T2[satname] = im_list
@@ -1302,15 +1373,15 @@ def check_images_available(inputs):
             # L7 and L8 have images in both C01 and C02, so complete each list with the other collection
             if satname not in ["L7", "L8"]:
                 continue  # only L7 and L8
-            im_list = get_image_info(
-                col_names_C02[satname], satname, polygon, dates_C02
-            )
+            # im_list = get_image_info(
+            #     col_names_C02[satname], satname, polygon, dates_C02
+            # )
+            im_list=get_image_info(col_names_C02[satname], satname, polygon, dates_C02,S2tile=inputs.get("S2tile", ""), prc_cloud_cover=prc_cloud_cover,months_list= months_list)
             sum_img = sum_img + len(im_list)
             print("     %s: %d images" % (satname, len(im_list)))
             im_dict_T2[satname] += im_list
 
-    print("  Total Tier 2: %d images" % sum_img)
-
+    print("  Total to download: %d images" % sum_img)
     return im_dict_T1, im_dict_T2
 
 
@@ -1360,47 +1431,7 @@ def get_s2cloudless(image_list: list, inputs: dict):
         raise e
 
 
-@retry  # Apply the retry decorator to the function
-def get_image_info(collection, satname, polygon, dates, **kwargs):
-    """
-    Reads info about EE images for the specified collection, satellite, and dates
-
-    KV WRL 2022
-
-    Arguments:
-    -----------
-    collection: str
-        name of the collection (e.g. 'LANDSAT/LC08/C02/T1_TOA')
-    satname: str
-        name of the satellite mission
-    polygon: list
-        coordinates of the polygon in lat/lon
-    dates: list of str
-        start and end dates (e.g. '2022-01-01')
-
-    Returns:
-    -----------
-    im_list: list of ee.Image objects
-        list with the info for the images
-    """
-    # get info about images
-    ee_col = ee.ImageCollection(collection)
-    # Initialize the collection with filterBounds and filterDate
-    col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(
-        dates[0], dates[1]
-    )
-    # If "S2tile" key is in kwargs and its associated value is truthy (not an empty string, None, etc.),
-    # then apply an additional filter to the collection.
-    if kwargs.get("S2tile"):
-        col = col.filterMetadata("MGRS_TILE", "equals", kwargs["S2tile"])  # 58GGP
-        print(f"Only keeping user-defined S2tile: {kwargs['S2tile']}")
-    im_list = col.getInfo().get("features")
-    # remove very cloudy images (>95% cloud cover)
-    im_list = remove_cloudy_images(im_list, satname)
-    return im_list
-
-
-def remove_cloudy_images(im_list, satname, prc_cloud_cover=95):
+def remove_cloudy_images(im_list, satname, prc_cloud_cover=95,**kwargs):
     """
     Removes from the EE collection very cloudy images (>95% cloud cover)
 
@@ -1434,6 +1465,7 @@ def remove_cloudy_images(im_list, satname, prc_cloud_cover=95):
         im_list_upt = im_list
 
     return im_list_upt
+
 
 
 @retry
