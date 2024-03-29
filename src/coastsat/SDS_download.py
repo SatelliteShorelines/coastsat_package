@@ -159,23 +159,29 @@ def filter_images_by_month(im_list, satname, months_list,**kwargs):
     im_list_upt: list
         updated list of images
     """
-    # remove very cloudy images from the collection (>95% cloud)
-    if satname in ["L5", "L7", "L8", "L9"]:
-        property_name = "DATE_ACQUIRED"
-    elif satname in ["S2"]:
-        property_name = "DATE_ACQUIRED"
-    # get the properties of the images
-    img_properties = [_["properties"][property_name] for _ in im_list]
-    img_months = [datetime.strptime(img["properties"][property_name], '%Y-%m-%d').month for img in im_list]
-    if np.any([img_month not in months_list for img_month in img_months]):
-        # drop all the images that are not in the months_list
-        idx_delete = np.where([datetime.strptime(date_acquired,'%Y-%m-%d').month not in months_list for date_acquired in img_properties])[0]
-        im_list_upt = [x for k, x in enumerate(im_list) if k not in idx_delete]
-    else:
-        im_list_upt = im_list
-
-    return im_list_upt
-
+    return im_list
+    # if satname in ["L5", "L7", "L8", "L9"]:
+    #     property_name = "DATE_ACQUIRED"
+    #     # get the properties of the images
+    #     img_properties = [_["properties"][property_name] for _ in im_list]
+    #     img_months = [datetime.strptime(img["properties"][property_name], '%Y-%m-%d').month for img in im_list]
+    #     if np.any([img_month not in months_list for img_month in img_months]):
+    #         # drop all the images that are not in the months_list
+    #         idx_delete = np.where([datetime.strptime(date_acquired,'%Y-%m-%d').month not in months_list for date_acquired in img_properties])[0]
+    #         im_list_upt = [x for k, x in enumerate(im_list) if k not in idx_delete]
+    #     else:
+    #         im_list_upt = im_list
+    # elif satname in ["S2"]:
+    #     property_name = 'system:time_start'
+    #     img_properties = [_["properties"][property_name] for _ in im_list]
+    #     img_months = [datetime.fromtimestamp(img["properties"][property_name] / 1000.0).month for img in im_list]
+    #     if np.any([img_month not in months_list for img_month in img_months]):
+    #         idx_delete = np.where([datetime.fromtimestamp(date_acquired / 1000.0).month not in months_list for date_acquired in img_properties])[0]
+    #         im_list_upt = [x for k, x in enumerate(im_list) if k not in idx_delete]
+    #     else:
+    #         im_list_upt = im_list
+    
+    # return im_list_upt
 
 @retry  # Apply the retry decorator to the function
 def get_image_info(collection, satname, polygon, dates, prc_cloud_cover:int=95,**kwargs):
@@ -219,44 +225,6 @@ def get_image_info(collection, satname, polygon, dates, prc_cloud_cover:int=95,*
     im_list = remove_cloudy_images(im_list, satname,prc_cloud_cover = prc_cloud_cover,**kwargs)
     im_list = filter_images_by_month(im_list, satname, kwargs.get("months_list", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,12,]))
     return im_list
-
-# def retry_deprecated(func):
-#     @wraps(func)
-#     def wrapper(*args, **kwargs):
-#         max_tries = 3
-#         # Get image_id from kwargs or use 'Unknown'
-#         image_id = kwargs.get("image_id", "Unknown image id")
-#         logger = kwargs.get("logger", None)
-#         delay = 1
-#         # attempt to download the image up to max_tries times
-#         for tries in range(max_tries):
-#             try:
-#                 print(f"calling {func.__name__}")
-#                 return func(*args, **kwargs)
-#             except Exception as e:
-#                 print(print("CLASS", type(e)))
-#                 if logger:
-#                     logger.warning(
-#                         f"Retry {tries + 1}/{max_tries} for function {func.__name__} with image_id {kwargs.get('image_id', 'N/A')} due to {e}"
-#                     )
-#                 if tries + 1 < max_tries:
-#                     # wait with exponential backoff
-#                     print(
-#                         f"Retry {tries + 1}/{max_tries} for function {func.__name__} with image_id {kwargs.get('image_id', 'N/A')} due to {type(e).__name__} error."
-#                     )
-#                     time.sleep(delay)
-#                     # delay_multiplier *= backoff
-#                 else:
-#                     # Re-raise the last exception if max retries have been exceeded )(i.e. no more retries)
-#                     print(
-#                         f"Max retries {tries + 1}/{max_tries}  exceeded for {func.__name__} due to {type(e).__name__}"
-#                     )
-#                     raise TooManyRequests(
-#                         f"Failed to process {image_id} after {max_tries} attempts due to: {e}"
-#                     )
-
-#     return wrapper
-
 
 @retry
 def remove_dimensions_from_bands(image_ee, **kwargs):
@@ -1356,7 +1324,7 @@ def check_images_available(inputs,months_list=None,prc_cloud_cover=95):
         if satname in ["L9", "S2"]:
             continue  # no Tier 2 for Sentinel-2 and Landsat 9
         # im_list = get_image_info(col_names_T2[satname], satname, polygon, dates_str)
-        im_list=get_image_info(col_names_T2[satname], satname, polygon, dates_C02,S2tile=inputs.get("S2tile", ""), prc_cloud_cover=prc_cloud_cover,months_list= months_list)
+        im_list=get_image_info(col_names_T2[satname], satname, polygon, dates_str,S2tile=inputs.get("S2tile", ""), prc_cloud_cover=prc_cloud_cover,months_list= months_list)
         sum_img = sum_img + len(im_list)
         print("     %s: %d images" % (satname, len(im_list)))
         im_dict_T2[satname] = im_list
