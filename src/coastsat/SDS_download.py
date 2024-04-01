@@ -187,7 +187,8 @@ def remove_dimensions_from_bands(image_ee, **kwargs):
     # remove some additional masks provided with S2
     im_bands = [band for band in im_bands if 'MSK_CLASSI' not in band['id']]
     for j in range(len(im_bands)):
-        del im_bands[j]["dimensions"]
+        if "dimensions" in im_bands[j]:
+            del im_bands[j]["dimensions"]
     return im_bands
 
 
