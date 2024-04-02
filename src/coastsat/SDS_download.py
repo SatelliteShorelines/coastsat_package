@@ -16,6 +16,7 @@ from typing import List, Dict, Union, Tuple
 import time
 from functools import wraps
 import traceback
+from datetime import timezone
 
 # earth engine module
 import ee
@@ -1039,6 +1040,7 @@ def read_metadata_file(filepath: str) -> Dict[str, Union[str, int, float]]:
     return metadata
 
 
+
 def get_metadata(inputs):
     """
     Gets the metadata from the downloaded images by parsing .txt files located
@@ -1068,8 +1070,10 @@ def get_metadata(inputs):
         raise FileNotFoundError(f"The directory {filepath} does not exist.")
     # initialize metadata dict
     metadata = dict([])
-    # loop through the satellite missions
-    for satname in ["L5", "L7", "L8", "L9", "S2"]:
+    # loop through the satellite missions that were specified in the inputs
+    satellite_list = inputs.get("sat_list", ["L5", "L7", "L8", "L9", "S2"])
+    
+    for satname in satellite_list:
         sat_path = os.path.join(filepath, satname)
         # if a folder has been created for the given satellite mission
         if satname in os.listdir(filepath):
@@ -1091,6 +1095,15 @@ def get_metadata(inputs):
             filenames_meta = sorted(os.listdir(filepath_meta))
             # loop through the .txt files
             for im_meta in filenames_meta:
+                if inputs.get("dates", None) is None:
+                    raise ValueError("The 'dates' key is missing from the inputs.")
+                    
+                start_date = datetime.strptime(inputs['dates'][0], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                end_date = datetime.strptime(inputs['dates'][1], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                input_date = parse_date_from_filename(im_meta)
+                # if the image date is outside the specified date range, skip it
+                if input_date < start_date or input_date > end_date:
+                    continue
                 meta_filepath = os.path.join(filepath_meta, im_meta)
                 meta_info = read_metadata_file(meta_filepath)
 
