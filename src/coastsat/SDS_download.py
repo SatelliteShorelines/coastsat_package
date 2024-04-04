@@ -160,29 +160,28 @@ def filter_images_by_month(im_list, satname, months_list,**kwargs):
     im_list_upt: list
         updated list of images
     """
-    return im_list
-    # if satname in ["L5", "L7", "L8", "L9"]:
-    #     property_name = "DATE_ACQUIRED"
-    #     # get the properties of the images
-    #     img_properties = [_["properties"][property_name] for _ in im_list]
-    #     img_months = [datetime.strptime(img["properties"][property_name], '%Y-%m-%d').month for img in im_list]
-    #     if np.any([img_month not in months_list for img_month in img_months]):
-    #         # drop all the images that are not in the months_list
-    #         idx_delete = np.where([datetime.strptime(date_acquired,'%Y-%m-%d').month not in months_list for date_acquired in img_properties])[0]
-    #         im_list_upt = [x for k, x in enumerate(im_list) if k not in idx_delete]
-    #     else:
-    #         im_list_upt = im_list
-    # elif satname in ["S2"]:
-    #     property_name = 'system:time_start'
-    #     img_properties = [_["properties"][property_name] for _ in im_list]
-    #     img_months = [datetime.fromtimestamp(img["properties"][property_name] / 1000.0).month for img in im_list]
-    #     if np.any([img_month not in months_list for img_month in img_months]):
-    #         idx_delete = np.where([datetime.fromtimestamp(date_acquired / 1000.0).month not in months_list for date_acquired in img_properties])[0]
-    #         im_list_upt = [x for k, x in enumerate(im_list) if k not in idx_delete]
-    #     else:
-    #         im_list_upt = im_list
+    if satname in ["L5", "L7", "L8", "L9"]:
+        property_name = "DATE_ACQUIRED"
+        # get the properties of the images
+        img_properties = [_["properties"][property_name] for _ in im_list]
+        img_months = [datetime.strptime(img["properties"][property_name], '%Y-%m-%d').month for img in im_list]
+        if np.any([img_month not in months_list for img_month in img_months]):
+            # drop all the images that are not in the months_list
+            idx_delete = np.where([datetime.strptime(date_acquired,'%Y-%m-%d').month not in months_list for date_acquired in img_properties])[0]
+            im_list_upt = [x for k, x in enumerate(im_list) if k not in idx_delete]
+        else:
+            im_list_upt = im_list
+    elif satname in ["S2"]:
+        property_name = 'system:time_start'
+        img_properties = [_["properties"][property_name] for _ in im_list]
+        img_months = [datetime.fromtimestamp(img["properties"][property_name] / 1000.0).month for img in im_list]
+        if np.any([img_month not in months_list for img_month in img_months]):
+            idx_delete = np.where([datetime.fromtimestamp(date_acquired / 1000.0).month not in months_list for date_acquired in img_properties])[0]
+            im_list_upt = [x for k, x in enumerate(im_list) if k not in idx_delete]
+        else:
+            im_list_upt = im_list
     
-    # return im_list_upt
+    return im_list_upt
 
 @retry  # Apply the retry decorator to the function
 def get_image_info(collection, satname, polygon, dates, prc_cloud_cover:int=95,**kwargs):
@@ -221,8 +220,6 @@ def get_image_info(collection, satname, polygon, dates, prc_cloud_cover:int=95,*
         print(f"Only keeping user-defined S2tile: {kwargs['S2tile']}")
     im_list = col.getInfo().get("features")
     # remove very cloudy images (>95% cloud cover)
-    # prc_cloud_cover = kwargs.get("prc_cloud_cover", 95)
-    print(f"prc_cloud_cover: {prc_cloud_cover}")
     im_list = remove_cloudy_images(im_list, satname,prc_cloud_cover = prc_cloud_cover,**kwargs)
     im_list = filter_images_by_month(im_list, satname, kwargs.get("months_list", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,12,]))
     return im_list
@@ -1255,11 +1252,8 @@ def check_images_available(inputs,months_list=None,prc_cloud_cover=95):
      im_dict_T2: list of dict
          list of images in Tier 2 (Landsat only)
     """
-    print(f"months_list: {months_list}")
-    print(f"prc_cloud_cover: {prc_cloud_cover}")
     if not months_list:
         months_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,12,]
-    print(f"months_list: {months_list}")
     dates = [datetime.strptime(_, "%Y-%m-%d") for _ in inputs["dates"]]
     dates_str = inputs["dates"]
     polygon = inputs["polygon"]
