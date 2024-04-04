@@ -1072,7 +1072,6 @@ def get_metadata(inputs):
     metadata = dict([])
     # loop through the satellite missions that were specified in the inputs
     satellite_list = inputs.get("sat_list", ["L5", "L7", "L8", "L9", "S2"])
-    
     for satname in satellite_list:
         sat_path = os.path.join(filepath, satname)
         # if a folder has been created for the given satellite mission
@@ -1172,16 +1171,18 @@ def remove_existing_imagery(image_dict:dict, metadata:dict,sat_list:list[str])->
     """
     for satname in sat_list:
         if satname in metadata and metadata[satname]['dates']:
-            first_date = metadata[satname]['dates'][0] - timedelta(days=1)
-            last_date = metadata[satname]['dates'][-1] + timedelta(days=1)
-            date_list = [datetime.fromtimestamp(image['properties']['system:time_start'] / 1000, tz=pytz.utc) for image in image_dict[satname]]
-
-            idx_new = np.where([not (first_date < img_date < last_date) for img_date in date_list])[0]
+            avail_date_list = [datetime.fromtimestamp(image['properties']['system:time_start'] / 1000, tz=pytz.utc).replace( microsecond=0) for image in image_dict[satname]]
+            if len(avail_date_list) == 0:
+                print(f'{satname}:There are {len(avail_date_list)} images available, {len(metadata[satname]["dates"])} images already exist, {len(avail_date_list)} to download')
+                continue
+            downloaded_dates = metadata[satname]['dates']
+            if len(downloaded_dates) == 0:
+                print(f'{satname}:There are {len(avail_date_list)} images available, {len(downloaded_dates)} images already exist, {len(avail_date_list)} to download')
+                continue
+            # get the indices of the images that are not already downloaded
+            idx_new = np.where([ not avail_date in downloaded_dates for avail_date in avail_date_list])[0]
             image_dict[satname] = [image_dict[satname][index] for index in idx_new]
-
-            num_existing = len(date_list) - len(idx_new)
-            print(f'{satname}: {num_existing} images already exist, {len(idx_new)} to download')
-
+            print(f'{satname}:There are {len(avail_date_list)} images available, {len(downloaded_dates)} images already exist, {len(idx_new)} to download')
     return image_dict
 
 def check_images_available(inputs):
