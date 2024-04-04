@@ -1315,6 +1315,16 @@ def check_images_available(inputs,months_list=None,prc_cloud_cover=95):
             sum_img = sum_img + len(im_list)
             print("     %s: %d images" % (satname, len(im_list)))
             im_dict_T1[satname] += im_list
+            
+    # if the directory already exists, remove the images that already exist
+    filepath = os.path.join(inputs['filepath'],inputs['sitename'])
+    if os.path.exists(filepath):
+        # get the metadata and satellites that need to be filtered
+        sat_list = inputs["sat_list"]
+        metadata = get_metadata(inputs)
+        # remove any images that already exist from im_dict_T1 because they've already been downloaded
+        im_dict_T1 = remove_existing_imagery(im_dict_T1, metadata,sat_list)
+            
     # if only S2 is in sat_list, stop here as no Tier 2 for Sentinel
     if len(inputs["sat_list"]) == 1 and inputs["sat_list"][0] == "S2":
         return im_dict_T1, []
