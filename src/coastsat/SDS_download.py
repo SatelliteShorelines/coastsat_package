@@ -1711,6 +1711,8 @@ def filter_S2_collection(im_list):
     im_list_flt: list
         filtered list of images
     """
+    if not im_list:
+        return im_list
 
     # get datetimes
     timestamps = [
