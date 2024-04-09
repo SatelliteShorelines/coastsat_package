@@ -1097,16 +1097,36 @@ def read_metadata_file(filepath: str) -> Dict[str, Union[str, int, float]]:
     return metadata
 
 def format_date(date_str: str) -> datetime:
-    date_formats = ["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"]
+    """
+    Converts a date string to a datetime object in UTC timezone.
 
+    Args:
+        date_str (str): The date string to be converted.
+
+    Returns:
+        datetime: The converted datetime object.
+
+    Raises:
+        ValueError: If the date string is in an invalid format.
+    """
+    
+    date_formats = ["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S"]
+    # convert datetime object to string
+    if isinstance(date_str, datetime) == True:
+        # converts the datetime object to a string
+        date_str = date_str.strftime("%Y-%m-%dT%H:%M:%S")
+
+    # format the string to a datetime object 
     for date_format in date_formats:
         try:
+            # creates a datetime object from a string with the date in UTC timezone
             start_date = datetime.strptime(date_str, date_format).replace(tzinfo=timezone.utc)
             return start_date
         except ValueError:
             pass
     else:
         raise ValueError(f"Invalid date format: {date_str}")
+
 
 def get_metadata(inputs):
     """
