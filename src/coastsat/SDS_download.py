@@ -1257,6 +1257,9 @@ def remove_existing_imagery(image_dict:dict, metadata:dict,sat_list:list[str])->
         dict: The updated image dictionary after removing existing imagery.
     """
     for satname in sat_list:
+        if satname not in metadata:
+            avail_date_list = [datetime.fromtimestamp(image['properties']['system:time_start'] / 1000, tz=pytz.utc).replace( microsecond=0) for image in image_dict[satname]]
+            print(f'{satname}:There are {len(avail_date_list)} images available, 0 images already exist, {len(avail_date_list)} to download')
         if satname in metadata and metadata[satname]['dates']:
             avail_date_list = [datetime.fromtimestamp(image['properties']['system:time_start'] / 1000, tz=pytz.utc).replace( microsecond=0) for image in image_dict[satname]]
             if len(avail_date_list) == 0:
@@ -1330,7 +1333,6 @@ def check_images_available(inputs,months_list=None,prc_cloud_cover=95):
         # S2 contains many duplicates images so filter collection to only keep images with same UTM Zone projection
         if satname == "S2":
             im_list = filter_S2_collection(im_list)
-        sum_img = sum_img + len(im_list)
         print("     %s: %d images" % (satname, len(im_list)))
         im_dict_T1[satname] = im_list
 
@@ -1347,11 +1349,7 @@ def check_images_available(inputs,months_list=None,prc_cloud_cover=95):
             # L7 and L8 have images in both C01 and C02, so complete each list with the other collection
             if satname not in ["L7", "L8"]:
                 continue
-            # im_list = get_image_info(
-            #     col_names_C02[satname], satname, polygon, dates_C02
-            # )
             im_list=get_image_info(col_names_C02[satname], satname, polygon, dates_C02,S2tile=inputs.get("S2tile", ""), prc_cloud_cover=prc_cloud_cover,months_list= months_list)
-            sum_img = sum_img + len(im_list)
             print("     %s: %d images" % (satname, len(im_list)))
             im_dict_T1[satname] += im_list
             
@@ -1363,7 +1361,12 @@ def check_images_available(inputs,months_list=None,prc_cloud_cover=95):
         metadata = get_metadata(inputs)
         # remove any images that already exist from im_dict_T1 because they've already been downloaded
         im_dict_T1 = remove_existing_imagery(im_dict_T1, metadata,sat_list)
-            
+    
+    # Sum all the images available in Tier 1
+    for satname in im_dict_T1:
+        sum_img = sum_img + len(im_dict_T1[satname])
+    print("  Total images available to download from Tier 1: %d images" % sum_img)
+          
     # if only S2 is in sat_list, stop here as no Tier 2 for Sentinel
     if len(inputs["sat_list"]) == 1 and inputs["sat_list"][0] == "S2":
         return im_dict_T1, []
@@ -1407,7 +1410,7 @@ def check_images_available(inputs,months_list=None,prc_cloud_cover=95):
             print("     %s: %d images" % (satname, len(im_list)))
             im_dict_T2[satname] += im_list
 
-    print("  Total to download: %d images" % sum_img)
+    print("  Total images available to download from Tier 2: %d images" % sum_img)
     return im_dict_T1, im_dict_T2
 
 
