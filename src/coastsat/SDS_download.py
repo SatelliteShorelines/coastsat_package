@@ -991,6 +991,7 @@ def retrieve_images(
                             
                         fn = [filepath_ms,filepath_swir,filepath_QA]
                         
+                        # Removes images whose cloud cover and no data coverage exceeds the threshold
                         skip_image=SDS_preprocess.filter_images_by_cloud_cover_nodata(fn,satname, cloud_mask_issue,max_cloud_no_data_cover,cloud_threshold,  do_cloud_mask=True, s2cloudless_prob=60)
                         
                         # if the images was filtered out, skip the image being saved as a jpg

@@ -66,7 +66,6 @@ def filter_images_by_cloud_cover_nodata(fn, satname, cloud_mask_issue, max_cloud
     if max_cloud_no_data_cover is None and max_cloud_cover is None:
         # nothing was filtered return False
         return False
-    print(f"max_cloud_no_data_cover: {max_cloud_no_data_cover}, max_cloud_cover: {max_cloud_cover}")
     (
         im_ms,
         georef,
@@ -115,9 +114,8 @@ def remove_files_above_threshold(filepaths: list[str], prc: float, threshold: in
     Returns:
         bool: True if files were removed, False otherwise.
     """
-    print(f"prc: {prc}, threshold: {threshold} {msg}")
     if prc > threshold:
-        print(f"skipping image {os.path.basename(filepaths[0])} {msg} {prc*100:.2f}%")
+        print(f"skipping image '{os.path.basename(filepaths[0])}' {msg} {prc*100:.2f}% exceeds threshold of {threshold*100:.2f}%")
         # delete files that exceed the cloud cover threshold
         for file in filepaths:
             os.remove(file)
@@ -283,7 +281,7 @@ def pad_edges(im_swir: np.ndarray, im_nodata: np.ndarray) -> np.ndarray:
     if right_pad > 0:
         im_nodata[:, -right_pad:] = True
 
-    # Apply this padding to your masks or other arrays as needed
+    # Apply this padding to your masks
     im_nodata[:top_pad, :] = True
     im_nodata[:, :left_pad] = True
     return im_nodata
@@ -570,10 +568,6 @@ def get_zero_pixels(im_ms: np.ndarray, shape: tuple) -> np.ndarray:
     im_zeros = np.ones(shape).astype(bool)
     for k in [1, 3, 4]:  # loop through the Green, NIR and SWIR bands
         im_zeros = np.logical_and(np.isin(im_ms[:, :, k], 0), im_zeros)
-    # modify the logic to add ANY pixel with 0 intensity in ANY of the Green, NIR and SWIR bands to the im_zeros mask
-    # im_zeros = np.zeros(shape).astype(bool)
-    # for k in [1, 3, 4]:  # loop through the Green, NIR and SWIR bands
-    #     im_zeros = np.logical_or(np.isin(im_ms[:, :, k], 0), im_zeros)
     return im_zeros
 
 
