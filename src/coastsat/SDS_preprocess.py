@@ -40,6 +40,90 @@ from coastsat import SDS_tools
 
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
+
+def filter_images_by_cloud_cover_nodata(fn, satname, cloud_mask_issue, max_cloud_no_data_cover=None, max_cloud_cover=None, do_cloud_mask=True, s2cloudless_prob=60):
+    """
+    Filters images based on cloud cover and no data pixels.
+
+    Args:
+        fn (list[str]): A list of file paths.
+            The first file path is the full path to mulitspectral image (ms) 
+            The second path is the swir/panchromatic image (swir/pan) depending on the satellite.
+                - For S2 the second path is the swir image (swir)
+                - For Landsat the second path is the panchromatic image (pan) except for Landsat 5 where it is the cloud mask image (mask)
+            The third path is the cloud mask image (mask) 
+                - except on Landsat 5 where it is the second path
+        satname (str): Name of the satellite.
+        cloud_mask_issue (bool): True if there is an issue with the cloud mask and sand pixels are being masked on the images
+        max_cloud_no_data_cover (float, optional): Maximum cloud and no data cover threshold. Defaults to None.
+        max_cloud_cover (float, optional): Maximum cloud cover threshold. Defaults to None.
+        do_cloud_mask (bool, optional): Flag indicating if cloud masking should be performed. Defaults to True.
+        s2cloudless_prob (int, optional): Probability threshold for cloud masking. Defaults to 60.
+
+    Returns:
+        bool: True if the image is filtered, False otherwise.
+    """
+    if max_cloud_no_data_cover is None and max_cloud_cover is None:
+        # nothing was filtered return False
+        return False
+    print(f"max_cloud_no_data_cover: {max_cloud_no_data_cover}, max_cloud_cover: {max_cloud_cover}")
+    (
+        im_ms,
+        georef,
+        cloud_mask,
+        im_extra,
+        im_QA,
+        im_nodata,
+    ) = preprocess_single(fn, satname, cloud_mask_issue, False, 'C02', do_cloud_mask, s2cloudless_prob)
+    
+    # check if the cloud and no data mask exceed the threshold
+    cloud_cover_combined = np.sum(cloud_mask) / cloud_mask.size
+    # if no max cloud and no data cover is provided then check the cloud cover
+    if max_cloud_no_data_cover is not None:
+        were_images_filtered=remove_files_above_threshold(fn, cloud_cover_combined, max_cloud_no_data_cover, msg="due to cloud and no data cover")
+        # return True if the image was filtered otherwise continue to check the cloud cover
+        if were_images_filtered:
+            return True
+        
+    if max_cloud_cover is not None:
+        cloud_mask_alone = np.logical_xor(cloud_mask, im_nodata)
+        # compute updated cloud cover percentage (without no data pixels)
+        valid_pixels = np.sum(~im_nodata)
+        cloud_cover = np.sum(cloud_mask_alone.astype(int)) / valid_pixels.astype(int)
+        return remove_files_above_threshold(fn, cloud_cover, max_cloud_cover, msg="due to cloud cover")
+    
+    # if nothing was filtered then return False
+    return False
+
+def remove_files_above_threshold(filepaths: list[str], prc: float, threshold: int, msg:str="due to cloud cover"):
+    """
+    Removes files that exceed the cloud cover threshold.
+
+    Args:
+        filepaths (list[str]): A list of file paths.
+            The first file path is the full path to mulitspectral image (ms) 
+            The second path is the swir/panchromatic image (swir/pan) depending on the satellite.
+                - For S2 the second path is the swir image (swir)
+                - For Landsat the second path is the panchromatic image (pan) except for Landsat 5 where it is the cloud mask image (mask)
+            The third path is the cloud mask image (mask) 
+                - except on Landsat 5 where it is the second path
+        prc (float): The percentage of cloud cover.
+        threshold (float): The threshold value for cloud cover.
+        msg (str): The message to be printed when the threshold is exceeded.
+        ex. "due to cloud cover" will print "skipping image due to cloud cover 50.0%"
+
+    Returns:
+        bool: True if files were removed, False otherwise.
+    """
+    print(f"prc: {prc}, threshold: {threshold} {msg}")
+    if prc > threshold:
+        print(f"skipping image {os.path.basename(filepaths[0])} {msg} {prc*100:.2f}%")
+        # delete files that exceed the cloud cover threshold
+        for file in filepaths:
+            os.remove(file)
+        return True
+    return False
+
 def create_gdf_from_image_extent(height:int, width:int, georef:np.array, image_epsg:int, output_epsg:int)->gpd.GeoDataFrame:
     """
     Create a GeoDataFrame containing a polygon from the extent of an image.
@@ -1308,24 +1392,25 @@ def get_reference_sl(metadata, settings):
     # otherwise get the user to manually digitise a shoreline on
     # S2, L8, L9 or L5 images (no L7 because of scan line error)
     # first try to use S2 images (10m res for manually digitizing the reference shoreline)
-    if "S2" in metadata.keys():
+    if "S2" in metadata.keys() and metadata.get("S2",{'filenames':[]})["filenames"]!=[]:
         satname = "S2"
     # if no S2 images, use L8 or L9 (15m res in the RGB with pansharpening)
-    elif "L8" in metadata.keys():
+    elif "L8" in metadata.keys() and metadata.get("L8",{'filenames':[]})["filenames"]!=[]:
         satname = "L8"
-    elif "L9" in metadata.keys():
+    elif "L9" in metadata.keys() and metadata.get("L9",{'filenames':[]})["filenames"]!=[]:
         satname = "L9"
     # if no S2, L8 or L9 use L5 (30m res)
-    elif "L5" in metadata.keys():
+    elif "L5" in metadata.keys() and metadata.get("L5",{'filenames':[]})["filenames"]!=[]:
         satname = "L5"
     # if only L7 images, ask user to download other images
     else:
         raise Exception(
             "You cannot digitize the shoreline on L7 images (because of gaps in the images), add another L8, S2 or L5 to your dataset."
         )
+    
     filepath = SDS_tools.get_filepath(settings["inputs"], satname)
     filenames = metadata[satname]["filenames"]
-
+    print(f"filenames: {filenames}")
     # create figure
     fig, ax = plt.subplots(1, 1, figsize=[18, 9], tight_layout=True)
     mng = plt.get_current_fig_manager()
@@ -1359,6 +1444,7 @@ def get_reference_sl(metadata, settings):
         )
         # skip image if cloud cover is above threshold
         if cloud_cover > settings["cloud_thresh"]:
+            print(f"cloud cover {cloud_cover} is above threshold {settings['cloud_thresh']}")
             continue
         # rescale image intensity for display purposes
         im_RGB = rescale_image_intensity(im_ms[:, :, [2, 1, 0]], cloud_mask, 99.9)
