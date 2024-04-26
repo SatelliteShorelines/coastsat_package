@@ -8,6 +8,9 @@ import os
 from datetime import datetime, timedelta
 from typing import List, Dict, Union, Optional
 
+import numpy as np
+import bisect
+
 # Third-party imports
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -691,6 +694,58 @@ def remove_inaccurate_georef(output, accuracy):
         output_filtered[key] = [output[key][i] for i in idx]
     print("%d bad georef" % (len(output["geoaccuracy"]) - len(idx)))
     return output_filtered
+
+
+def get_nearest_datapoint(dates, dates_ts, values_ts):
+    """
+    Retrieves the nearest data points from a time-series for a given set of target dates.
+    This function handles exact date matches efficiently and finds the closest date when
+    an exact match isn't present, using a binary search mechanism for improved performance.
+
+    Ensure that both `dates` and `dates_ts` are datetime objects and are either both timezone-aware
+    or both timezone-naive. The function checks if the provided time-series covers the range
+    of the target dates and adjusts for edge cases where target dates might align exactly
+    with the earliest or latest entries in the time-series.
+
+    Arguments:
+    -----------
+    dates : list of datetime.datetime
+        Target dates for which the nearest data points in the time-series are desired.
+    dates_ts : list of datetime.datetime
+        Dates in the time-series from which data points will be extracted.
+    values_ts : np.array
+        Values corresponding to each date in `dates_ts`.
+
+    Returns:
+    -----------
+    values : np.array
+        An array of values from `values_ts` that are closest to each date in `dates`.
+
+    """
+
+    # get closest point to each date (handles exact matches and uses bisect for efficient search)
+    indices = [bisect.bisect_left(dates_ts, date) for date in dates]
+    temp = []
+    for idx, date in zip(indices, dates):
+        if idx < len(dates_ts) and dates_ts[idx] == date:
+            # Exact match found
+            temp.append(values_ts[idx])
+        elif idx == 0:
+            # Before the first element (shouldn't occur due to range check)
+            temp.append(values_ts[0])
+        elif idx == len(dates_ts):
+            # After the last element (shouldn't occur due to range check)
+            temp.append(values_ts[-1])
+        else:
+            # Find the nearest of the two possible elements
+            prev_date = dates_ts[idx - 1]
+            next_date = dates_ts[idx]
+            if (date - prev_date) <= (next_date - date):
+                temp.append(values_ts[idx - 1])
+            else:
+                temp.append(values_ts[idx])
+
+    return np.array(temp)
 
 
 def get_closest_datapoint(dates, dates_ts, values_ts):

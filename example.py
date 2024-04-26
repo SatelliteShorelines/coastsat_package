@@ -305,7 +305,11 @@ tides_ts = np.array(tide_data['tide'])
 
 # get tide levels corresponding to the time of image acquisition
 dates_sat = output['dates']
-tides_sat = SDS_tools.get_closest_datapoint(dates_sat, dates_ts, tides_ts)
+try:
+    tides_sat = SDS_tools.get_closest_datapoint(dates_sat, dates_ts, tides_ts)
+except Exception as e:
+    print("\nThe default method of getting the closest datapoint failed. Trying the second method")
+    tides_sat = SDS_tools.get_nearest_datapoint(dates_sat, dates_ts, tides_ts)
 
 # plot the subsampled tide data
 fig, ax = plt.subplots(1,1,figsize=(15,4), tight_layout=True)
