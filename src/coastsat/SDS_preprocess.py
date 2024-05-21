@@ -905,15 +905,15 @@ def create_cloud_mask(im_QA, satname, cloud_mask_issue, collection):
         cloud_mask = morphology.remove_small_objects(
             cloud_mask, min_size=40, connectivity=1
         )
-        if cloud_mask_issue:
-            elem = morphology.square(6)  # use a square of width 6 pixels
-            cloud_mask = morphology.binary_opening(
-                cloud_mask, elem
-            )  # perform image opening
-            # remove objects with less than min_size connected pixels
-            morphology.remove_small_objects(
-                cloud_mask, min_size=100, connectivity=1, out=cloud_mask
-            )
+    # this is only for if the cloud mask was applied to the shoreline accidentally
+    if cloud_mask_issue:
+        cloud_mask = np.zeros_like(im_QA, dtype=bool)
+        for value in cloud_values:
+            cloud_mask_temp = np.isin(im_QA, value)         
+            elem = morphology.square(6) # use a square of width 6 pixels
+            cloud_mask_temp = morphology.binary_opening(cloud_mask_temp, elem) # perform image opening            
+            cloud_mask_temp = morphology.remove_small_objects(cloud_mask_temp, min_size=100, connectivity=1)
+            cloud_mask = np.logical_or(cloud_mask, cloud_mask_temp)
 
     return cloud_mask
 
