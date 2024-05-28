@@ -17,7 +17,7 @@ authors = [
   { name="Sharon Fitzpatrick" },
 ]
 # find` directive with `include` or `exclude`
-description = "A Global shoreline mapping tool from satellite imagery"
+description = "A packaged version of CoastSat: A Global shoreline mapping tool from satellite imagery"
 dependencies = [ "scikit-image",
   "earthengine-api>=0.1.304",
   "jupyterlab>=3.0.0",
@@ -40,5 +40,5 @@ classifiers = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/kvos/CoastSat"
-"Bug Tracker" = "https://github.com/kvos/CoastSat/issues"
+"Homepage" = "https://github.com/SatelliteShorelines/coastsat_package"
+"Bug Tracker" = "https://github.com/SatelliteShorelines/coastsat_package/issues"
