@@ -141,6 +141,200 @@ def debug_kill_wifi():
 
     os.system("netsh wlan disconnect")
 
+def get_images_list_from_collection(ee_col, polygon, dates):
+    """
+    Retrieves a list of images from a given Earth Engine collection within a specified polygon and date range.
+
+    Args:
+        ee_col (ee.ImageCollection): The Earth Engine collection to retrieve images from.
+        polygon (list): The coordinates of the polygon as a list of [longitude, latitude] pairs.
+        dates (list): The start and end dates of the date range as a list of strings in the format "YYYY-MM-DD".
+
+    Returns:
+        list: A list of images in the collection that satisfy the given polygon and date range.
+    """
+    col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(dates[0], dates[1])
+    col_size = col.size().getInfo()
+
+    im_list = []
+    # the max size of the collection is 5000, so we need to split the collection if it is larger
+    if col_size > 4999:
+        num_splits = 2
+        split_ranges = split_date_range(dates[0], dates[1], num_splits)
+        while True:
+            sub_col_sizes = []
+            for start_date, end_date in split_ranges:
+                sub_col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(start_date, end_date)
+                sub_col_size = sub_col.size().getInfo()
+                sub_col_sizes.append(sub_col_size)
+            
+            if all(size <= 4999 for size in sub_col_sizes):
+                break
+            num_splits += 1
+            split_ranges = split_date_range(dates[0], dates[1], num_splits)
+
+        for start_date, end_date in split_ranges:
+            sub_col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(start_date, end_date)
+            im_list.extend(sub_col.getInfo().get("features"))
+    else:
+        im_list = col.getInfo().get("features")
+    return im_list
+
+def split_date_range(start_date, end_date, num_splits):
+    """
+    Splits a date range into multiple smaller date ranges.
+
+    Args:
+        start_date (str): The start date of the range in the format 'YYYY-MM-DD'.
+        end_date (str): The end date of the range in the format 'YYYY-MM-DD'.
+        num_splits (int): The number of splits to create.
+
+    Returns:
+        list: A list of tuples representing the split date ranges. Each tuple contains the start date and end date of a split range in the format 'YYYY-MM-DD'.
+
+    Raises:
+        ValueError: If the number of splits is greater than the range of days available.
+    """
+    # Convert strings to datetime objects
+    start_date = datetime.strptime(start_date, '%Y-%m-%d')
+    end_date = datetime.strptime(end_date, '%Y-%m-%d')
+    
+    # Calculate the total duration of the range
+    total_duration = (end_date - start_date).days
+    
+    if total_duration < num_splits - 1:
+        raise ValueError("The number of splits is greater than the range of days available.")
+    
+     # Calculate the duration of each split
+    split_duration = total_duration // num_splits
+    
+    # Generate the split date ranges
+    split_ranges = []
+    for i in range(num_splits):
+        split_start_date = start_date + timedelta(days=i*split_duration)
+        if i == num_splits - 1:
+            # Ensure the last range ends exactly at the end_date
+            split_end_date = end_date
+        else:
+            split_end_date = split_start_date + timedelta(days=split_duration)
+        
+        # Append the split range as a tuple
+        split_ranges.append((split_start_date.strftime('%Y-%m-%d'), split_end_date.strftime('%Y-%m-%d')))
+    
+    return split_ranges
+
+def get_tier1_images(inputs, polygon, dates, scene_cloud_cover, months_list):
+    """
+    Retrieves Tier 1 images from Landsat and Sentinel-2 collections based on the given inputs.
+
+    Args:
+        inputs (dict): A dictionary containing input parameters.
+        polygon (str): The polygon representing the area of interest.
+        dates (list): A list of dates to filter the images.
+        scene_cloud_cover (float): The maximum cloud cover percentage allowed for the images.
+        months_list (list): A list of months to filter the images.
+
+    Returns:
+        dict: A dictionary containing the retrieved images, grouped by satellite name.
+
+    """
+    print("- In Landsat Tier 1 & Sentinel-2 Level-1C:")
+    col_names_T1 = {
+        "L5": "LANDSAT/LT05/%s/T1_TOA" % inputs["landsat_collection"],
+        "L7": "LANDSAT/LE07/%s/T1_TOA" % inputs["landsat_collection"],
+        "L8": "LANDSAT/LC08/%s/T1_TOA" % inputs["landsat_collection"],
+        "L9": "LANDSAT/LC09/C02/T1_TOA",
+        "S2": "COPERNICUS/S2_HARMONIZED",
+    }
+    im_dict_T1 = dict([])
+    for satname in inputs["sat_list"]:
+        im_list = get_image_info(col_names_T1[satname], satname, polygon, dates, S2tile=inputs.get("S2tile", ""), scene_cloud_cover=scene_cloud_cover, months_list=months_list)
+        if satname == "S2":
+            im_list = filter_S2_collection(im_list)
+        print("     %s: %d images" % (satname, len(im_list)))
+        im_dict_T1[satname] = im_list
+    return im_dict_T1
+
+def remove_existing_images_if_needed(inputs, im_dict_T1):
+    """
+    Removes existing images if needed based on the provided inputs.
+
+    Args:
+        inputs (dict): A dictionary containing the input parameters.
+        im_dict_T1 (dict): A dictionary containing the imagery data.
+
+    Returns:
+        dict: The updated imagery data dictionary after removing existing images if needed.
+    """
+    filepath = os.path.join(inputs['filepath'], inputs['sitename'])
+    if os.path.exists(filepath):
+        sat_list = inputs["sat_list"]
+        metadata = get_metadata(inputs)
+        im_dict_T1 = remove_existing_imagery(im_dict_T1, metadata, sat_list)
+    return im_dict_T1
+
+def get_tier2_images(inputs, polygon, dates_str, scene_cloud_cover, months_list):
+    """
+    Retrieves Tier 2 images for Landsat satellites.
+
+    Args:
+        inputs (dict): A dictionary containing input parameters.
+        polygon (str): The polygon coordinates of the area of interest.
+        dates_str (str): A string representing the dates of interest.
+        scene_cloud_cover (float): The maximum allowable cloud cover for the scenes.
+        months_list (list): A list of months to filter the images.
+
+    Returns:
+        dict: A dictionary containing the retrieved Tier 2 images for each Landsat satellite.
+    """
+    print("- In Landsat Tier 2 (not suitable for time-series analysis):", end="\n")
+    col_names_T2 = {
+        "L5": "LANDSAT/LT05/%s/T2_TOA" % inputs["landsat_collection"],
+        "L7": "LANDSAT/LE07/%s/T2_TOA" % inputs["landsat_collection"],
+        "L8": "LANDSAT/LC08/%s/T2_TOA" % inputs["landsat_collection"],
+    }
+    im_dict_T2 = dict([])
+    for satname in inputs["sat_list"]:
+        if satname in ["L9", "S2"]:
+            continue  # no Tier 2 for Sentinel-2 and Landsat 9
+        im_list = get_image_info(col_names_T2[satname], satname, polygon, dates_str, S2tile=inputs.get("S2tile", ""), scene_cloud_cover=scene_cloud_cover, months_list=months_list)
+        print("     %s: %d images" % (satname, len(im_list)))
+        im_dict_T2[satname] = im_list
+    return im_dict_T2
+
+def check_dates_order(dates):
+    """
+    Check if the given list of dates is in the correct chronological order.
+
+    Args:
+        dates (list): A list of dates.
+
+    Raises:
+        Exception: If the dates are not in the correct chronological order.
+
+    """
+    if dates[1] <= dates[0]:
+        raise Exception("Verify that your dates are in the correct chronological order")
+
+def initialize_ee():
+    """
+    Initializes the Earth Engine Python API.
+
+    This function attempts to initialize the Earth Engine Python API by creating an
+    `ee.ImageCollection` object. If the initialization fails, it means that the API
+    has already been initialized, and the function does nothing.
+
+    Returns:
+        None
+    """
+    try:
+        ee.ImageCollection("LANDSAT/LT05/C02/T1_TOA")
+    except:
+        ee.Initialize()
+
+def check_collection(collection):
+    if collection == "C01":
+        raise Exception("Collection 1 (C01) is not supported. Please use Collection 2 (C02).")
 
 def filter_images_by_month(im_list, satname, months_list,**kwargs):
     """
@@ -210,6 +404,11 @@ def get_image_info(collection, satname, polygon, dates, scene_cloud_cover:float=
     im_list: list of ee.Image objects
         list with the info for the images
     """
+    # Convert to strings if necessary
+    if isinstance(start_date, datetime):
+        start_date = start_date.strftime('%Y-%m-%d')
+    if isinstance(end_date, datetime):
+        end_date = end_date.strftime('%Y-%m-%d')
     
     # get info about images
     ee_col = ee.ImageCollection(collection)
@@ -222,7 +421,10 @@ def get_image_info(collection, satname, polygon, dates, scene_cloud_cover:float=
     if kwargs.get("S2tile"):
         col = col.filterMetadata("MGRS_TILE", "equals", kwargs["S2tile"])  # 58GGP
         print(f"Only keeping user-defined S2tile: {kwargs['S2tile']}")
-    im_list = col.getInfo().get("features")
+    
+    # filter the collection and get the list of images in the collection
+    im_list  = get_images_list_from_collection(ee_col, polygon, dates)
+ 
     # remove very cloudy images (>95% cloud cover)
     im_list = remove_cloudy_images(im_list, satname,cloud_threshold = scene_cloud_cover,**kwargs)
     im_list = filter_images_by_month(im_list, satname, kwargs.get("months_list", [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,12,]))
@@ -293,7 +495,9 @@ def get_georeference_accuracy(satname: str, im_meta: dict) -> str:
 
     Sentinel-2 don't provide a georeferencing accuracy (RMSE as in Landsat), instead the images include a quality control flag in the metadata that
     indicates georeferencing accuracy: a value of 1 signifies a passed geometric check, while -1 denotes failure(i.e., the georeferencing is not accurate).
-    This flag is stored in the image's metadata, which is additional information about the image stored with it. However, the specific property or field in the metadata where this flag is stored can vary across the Sentinel-2 archive, meaning it's not always in the same place or under the same name.
+    This flag is stored in the image's metadata, which is additional information about the image stored with it.
+    However, the specific property or field in the metadata where this flag is stored can vary across the Sentinel-2 archive, 
+    meaning it's not always in the same place or under the same name.
 
     Parameters:
     satname (str): Satellite name, e.g., 'L5', 'L7', 'L8', 'L9', or 'S2'.
