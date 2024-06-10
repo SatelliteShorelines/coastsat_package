@@ -1364,3 +1364,28 @@ def compare_timeseries(ts, gt, key, settings):
     ax3.text(0, 0.98, str_stats, va="top", transform=ax3.transAxes)
 
     return chain_sat, chain_sur, satnames, fig
+
+
+def ordinal(n: int):
+    """
+    Produces ordinal number suffix (1st 2nd 3rd) for readability when downloading imagery.
+
+    FM UofGlasgow 2024
+
+    Arguments:
+    -----------
+    n: int
+        number usually relating to an image in a list
+
+    Returns:
+    -----------
+    ordnum: string
+        original number of image but as a string with correct ordinal ending
+
+    """
+    if 11 <= (n % 100) <= 13:
+        suffix = 'th'
+    else:
+        suffix = ['th','st','nd','rd','th'][min(n % 10, 4)]
+    ordnum = str(n) + suffix
+    return ordnum
