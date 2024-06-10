@@ -772,7 +772,7 @@ def retrieve_images(
 
                     # update the loading bar with the status
                     pbar.set_description_str(
-                        desc=f"{inputs['sitename']}, {satname}: Loading bands for {i}th image ", refresh=True
+                        desc=f"{inputs['sitename']}, {satname}: Loading bands for {SDS_tools.ordinal(i)} image ", refresh=True
                     )
                     # first delete dimensions key from dictionary
                     # otherwise the entire image is extracted (don't know why)
@@ -795,14 +795,14 @@ def retrieve_images(
                         # adjust polygon to match image coordinates so that there is no resampling
                         proj = image_ee.select("B1").projection()
                         pbar.set_description_str(
-                            desc=f"{inputs['sitename']}, {satname}: adjusting polygon {i}th image ", refresh=True
+                            desc=f"{inputs['sitename']}, {satname}: adjusting polygon {SDS_tools.ordinal(i)} image ", refresh=True
                         )
                         ee_region = adjust_polygon(
                             inputs["polygon"], proj, image_id=im_meta["id"], logger=logger
                         )
                         # download .tif from EE (one file with ms bands and one file with QA band)
                         pbar.set_description_str(
-                            desc=f"{inputs['sitename']}, {satname}: Downloading tif for {i}th image ",
+                            desc=f"{inputs['sitename']}, {satname}: Downloading tif for {SDS_tools.ordinal(i)} image ",
                             refresh=True,
                         )
                         fn_ms, fn_QA = download_tif(
@@ -847,7 +847,7 @@ def retrieve_images(
                         filepath_ms = os.path.join(fp_ms, im_fn["ms"])
                         
                         pbar.set_description_str(
-                            desc=f"{inputs['sitename']}, {satname}: Transforming {i}th image ", refresh=True
+                            desc=f"{inputs['sitename']}, {satname}: Transforming {SDS_tools.ordinal(i)} image ", refresh=True
                         )
                         warp_image_to_target(
                             fn_in,
@@ -924,7 +924,7 @@ def retrieve_images(
                         proj_ms = image_ee.select("B1").projection()
                         proj_pan = image_ee.select("B8").projection()
                         pbar.set_description_str(
-                            desc=f"{inputs['sitename']}, {satname}: adjusting polygon {i}th image ", refresh=True
+                            desc=f"{inputs['sitename']}, {satname}: adjusting polygon {SDS_tools.ordinal(i)} image ", refresh=True
                         )
                         ee_region_ms = adjust_polygon(
                             inputs["polygon"],
@@ -941,7 +941,7 @@ def retrieve_images(
 
                         # download both ms and pan bands from EE
                         pbar.set_description_str(
-                            desc=f"{inputs['sitename']}, {satname}: Downloading tif for {i}th image ",
+                            desc=f"{inputs['sitename']}, {satname}: Downloading tif for {SDS_tools.ordinal(i)} image ",
                             refresh=True,
                         )
                         fn_ms, fn_QA = download_tif(
@@ -975,7 +975,7 @@ def retrieve_images(
                             )
                         # if multiple images taken at the same date add 'dupX' to the name (duplicate number X)
                         pbar.set_description_str(
-                            desc=f"{inputs['sitename']}, {satname}: remove duplicates for {i}th image ",
+                            desc=f"{inputs['sitename']}, {satname}: remove duplicates for {SDS_tools.ordinal(i)} image ",
                             refresh=True,
                         )
                         im_fn = handle_duplicate_image_names(
@@ -997,7 +997,7 @@ def retrieve_images(
                         fn_out = os.path.join(fp_ms, im_fn["ms"])
                         filepath_ms = os.path.join(fp_ms, im_fn["ms"])
                         pbar.set_description_str(
-                            desc=f"{inputs['sitename']}, {satname}: Transforming {i}th image ", refresh=True
+                            desc=f"{inputs['sitename']}, {satname}: Transforming {SDS_tools.ordinal(i)} image ", refresh=True
                         )
                         warp_image_to_target(
                             fn_in,
@@ -1073,7 +1073,7 @@ def retrieve_images(
                         proj_swir = image_ee.select("B11").projection()
                         proj_mask = image_ee.select("QA60").projection()
                         pbar.set_description_str(
-                            desc=f"{inputs['sitename']}, {satname}: adjusting polygon {i}th image ", refresh=True
+                            desc=f"{inputs['sitename']}, {satname}: adjusting polygon {SDS_tools.ordinal(i)} image ", refresh=True
                         )
                         ee_region_ms = adjust_polygon(
                             inputs["polygon"],
@@ -1095,7 +1095,7 @@ def retrieve_images(
                         )
                         # download the ms, swir and QA bands from EE
                         pbar.set_description_str(
-                            desc=f"{inputs['sitename']}, {satname}: Downloading tif for {i}th image ",
+                            desc=f"{inputs['sitename']}, {satname}: Downloading tif for {SDS_tools.ordinal(i)} image ",
                             refresh=True,
                         )
                         fn_ms = download_tif(
@@ -1140,7 +1140,7 @@ def retrieve_images(
                             )
                         # if multiple images taken at the same date add 'dupX' to the name (duplicate)
                         pbar.set_description_str(
-                            desc=f"{inputs['sitename']}, {satname}: remove duplicates for {i}th image ",
+                            desc=f"{inputs['sitename']}, {satname}: remove duplicates for {SDS_tools.ordinal(i)} image ",
                             refresh=True,
                         )
                         im_fn = handle_duplicate_image_names(
@@ -1161,7 +1161,7 @@ def retrieve_images(
                         fn_out = os.path.join(fp_swir, im_fn["swir"])
                         filepath_swir = os.path.join(fp_swir, im_fn["swir"])
                         pbar.set_description_str(
-                            desc=f"{inputs['sitename']}, {satname}: Transforming {i}th image ", refresh=True
+                            desc=f"{inputs['sitename']}, {satname}: Transforming {SDS_tools.ordinal(i)} image ", refresh=True
                         )
                         warp_image_to_target(
                             fn_in,
