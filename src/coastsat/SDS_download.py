@@ -141,6 +141,7 @@ def debug_kill_wifi():
 
     os.system("netsh wlan disconnect")
 
+
 def get_images_list_from_collection(ee_col, polygon, dates):
     """
     Retrieves a list of images from a given Earth Engine collection within a specified polygon and date range.
@@ -195,10 +196,13 @@ def split_date_range(start_date, end_date, num_splits):
     Raises:
         ValueError: If the number of splits is greater than the range of days available.
     """
-    # Convert strings to datetime objects
-    start_date = datetime.strptime(start_date, '%Y-%m-%d')
-    end_date = datetime.strptime(end_date, '%Y-%m-%d')
-    
+    # Check if start_date and end_date are strings and convert them if necessary
+    if isinstance(start_date, str):
+        start_date = datetime.strptime(start_date, '%Y-%m-%d')
+
+    if isinstance(end_date, str):
+        end_date = datetime.strptime(end_date, '%Y-%m-%d')
+        
     # Calculate the total duration of the range
     total_duration = (end_date - start_date).days
     
@@ -614,6 +618,66 @@ def merge_image_tiers(inputs, im_dict_T1, im_dict_T2):
 
     return im_dict_T1
 
+
+def check_images_available(inputs, months_list=None, scene_cloud_cover=0.95,tier1=True,tier2=False):
+    """
+    Scan the GEE collections to see how many images are available for each
+    satellite mission (L5, L7, L8, L9, S2), collection (C02) and tier (T1, T2).
+
+    KV WRL 2018
+
+    Arguments:
+    -----------
+    inputs: dict
+        inputs dictionary
+    months_list: list of int
+        list of months to filter the images by and only keep images in these months (default is None)
+        example: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    scene_cloud_cover: int
+        maximum cloud cover percentage for the scene (default is 95) 
+        Note: this is the entire scene not just the ROI
+
+    Returns:
+    -----------
+    im_dict_T1: list of dict
+        list of images in Tier 1 and Level-1C
+    im_dict_T2: list of dict
+        list of images in Tier 2 (Landsat only)
+    """
+    if months_list is None:
+        months_list = list(range(1, 13))
+    
+    dates = [datetime.strptime(_, "%Y-%m-%d") for _ in inputs["dates"]]
+    dates_str = inputs["dates"]
+    polygon = inputs["polygon"]
+
+    im_dict_T2 = {}
+    im_dict_T1 = {}
+    
+    check_dates_order(dates)
+    initialize_ee()
+    # check_collection(inputs["landsat_collection"])
+
+    print("Number of images available between %s and %s:" % (dates_str[0], dates_str[1]), end="\n")
+
+    if tier1:
+        im_dict_T1 = get_tier1_images(inputs, polygon, dates, scene_cloud_cover, months_list)
+        im_dict_T1 = remove_existing_images_if_needed(inputs, im_dict_T1)
+
+    sum_img = sum(len(im_dict_T1[satname]) for satname in im_dict_T1)
+    print("  Total images available to download from Tier 1: %d images" % sum_img)
+
+    if len(inputs["sat_list"]) == 1 and inputs["sat_list"][0] == "S2":
+        return im_dict_T1, []
+
+    if tier2:
+        im_dict_T2 = get_tier2_images(inputs, polygon, dates_str, scene_cloud_cover, months_list)
+        im_dict_T2 = remove_existing_images_if_needed(inputs, im_dict_T2)
+    
+    sum_img = sum(len(im_dict_T2[satname]) for satname in im_dict_T2)
+    print("  Total images available to download from Tier 2: %d images" % sum_img)
+
+    return im_dict_T1, im_dict_T2
 
 def retrieve_images(
     inputs,
@@ -1551,115 +1615,6 @@ def remove_existing_imagery(image_dict:dict, metadata:dict,sat_list:list[str])->
     return image_dict
 
 
-def check_images_available(inputs,months_list=None,scene_cloud_cover=0.95):
-    """
-    Scan the GEE collections to see how many images are available for each
-     satellite mission (L5,L7,L8,L9,S2), collection (C02) and tier (T1,T2).
-
-     KV WRL 2018
-
-     Arguments:
-     -----------
-     inputs: dict
-         inputs dictionary
-    months_list: list of int
-        list of months to filter the images by and only keep images in these months (default is None)
-        example: [1,2,3,4,5,6,7,8,9,10,11,12]
-    scene_cloud_cover: int
-        maximum cloud cover percentage for the scene (default is 95) 
-        Note: this is the entire scene not just the ROI
-
-     Returns:
-     -----------
-     im_dict_T1: list of dict
-         list of images in Tier 1 and Level-1C
-     im_dict_T2: list of dict
-         list of images in Tier 2 (Landsat only)
-    """
-    if months_list is None:
-        months_list = list(range(1, 13))
-    dates = [datetime.strptime(_, "%Y-%m-%d") for _ in inputs["dates"]]
-    dates_str = inputs["dates"]
-    polygon = inputs["polygon"]
-
-    # check if dates are in chronological order
-    if dates[1] <= dates[0]:
-        raise Exception("Verify that your dates are in the correct chronological order")
-
-    # validates the inputs have references the correct collection (C02)
-    inputs = validate_collection(inputs)
-
-    # check if EE was initialised or not
-    try:
-        ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA")
-    except:
-        ee.Initialize()
-
-    print(
-        "Number of images available between %s and %s:" % (dates_str[0], dates_str[1]),
-        end="\n",
-    )
-
-    # CREATES A DICTIONARY OF SATELLITES CONTAINING THE IMAGES IN TIER 1 IN COLLECTION C02
-    # get images in Landsat Tier 1 as well as Sentinel Level-1C
-    print("- In Landsat Tier 1 & Sentinel-2 Level-1C:")
-    col_names_T1 = {
-        "L5": "LANDSAT/LT05/%s/T1_TOA" % inputs["landsat_collection"],
-        "L7": "LANDSAT/LE07/%s/T1_TOA" % inputs["landsat_collection"],
-        "L8": "LANDSAT/LC08/%s/T1_TOA" % inputs["landsat_collection"],
-        "L9": "LANDSAT/LC09/C02/T1_TOA",  # only C02 for Landsat 9
-        "S2": "COPERNICUS/S2_HARMONIZED",
-    }
-    im_dict_T1 = dict([])
-    sum_img = 0
-    # gets the list of images for each satellite mission
-    for satname in inputs["sat_list"]:
-        im_list=get_image_info(col_names_T1[satname], satname, polygon, dates,S2tile=inputs.get("S2tile", ""), scene_cloud_cover=scene_cloud_cover,months_list= months_list)
-        # S2 contains many duplicates images so filter collection to only keep images with same UTM Zone projection
-        if satname == "S2":
-            im_list = filter_S2_collection(im_list)
-        print("     %s: %d images" % (satname, len(im_list)))
-        im_dict_T1[satname] = im_list
-
-    # if the directory already exists, remove the images that already exist from the download request
-    filepath = os.path.join(inputs['filepath'],inputs['sitename'])
-    if os.path.exists(filepath):
-        # get the metadata and satellites that need to be filtered
-        sat_list = inputs["sat_list"]
-        metadata = get_metadata(inputs)
-        # remove any images that already exist from im_dict_T1 because they've already been downloaded
-        im_dict_T1 = remove_existing_imagery(im_dict_T1, metadata,sat_list)
-    
-    # Sum all the images available in Tier 1
-    for satname in im_dict_T1:
-        sum_img = sum_img + len(im_dict_T1[satname])
-    print("  Total images available to download from Tier 1: %d images" % sum_img)
-          
-    # if only S2 is in sat_list, stop here as no Tier 2 for Sentinel
-    if len(inputs["sat_list"]) == 1 and inputs["sat_list"][0] == "S2":
-        return im_dict_T1, []
-
-    # CREATES A DICTIONARY OF SATELLITES CONTAINING THE IMAGES IN TIER 2
-    # if user also requires Tier 2 images, check the T2 collections as well
-    col_names_T2 = {
-        "L5": "LANDSAT/LT05/%s/T2_TOA" % inputs["landsat_collection"],
-        "L7": "LANDSAT/LE07/%s/T2_TOA" % inputs["landsat_collection"],
-        "L8": "LANDSAT/LC08/%s/T2_TOA" % inputs["landsat_collection"],
-    }
-    print("- In Landsat Tier 2 (not suitable for time-series analysis):", end="\n")
-    im_dict_T2 = dict([])
-    sum_img = 0
-    for satname in inputs["sat_list"]:
-        if satname in ["L9", "S2"]:
-            continue  # no Tier 2 for Sentinel-2 and Landsat 9
-        im_list=get_image_info(col_names_T2[satname], satname, polygon, dates_str,S2tile=inputs.get("S2tile", ""), scene_cloud_cover=scene_cloud_cover,months_list= months_list)
-        sum_img = sum_img + len(im_list)
-        print("     %s: %d images" % (satname, len(im_list)))
-        im_dict_T2[satname] = im_list
-
-
-    print("  Total images available to download from Tier 2: %d images" % sum_img)
-    return im_dict_T1, im_dict_T2
 
 
 def get_s2cloudless(image_list: list, inputs: dict):
@@ -1680,14 +1635,9 @@ def get_s2cloudless(image_list: list, inputs: dict):
         # Convert string dates to datetime objects
         dates = [datetime.strptime(date, "%Y-%m-%d") for date in inputs["dates"]]
         polygon = inputs["polygon"]
-        collection = "COPERNICUS/S2_CLOUD_PROBABILITY"
-        # get s2cloudless collection
-        s2cloudless_col = (
-            ee.ImageCollection(collection)
-            .filterBounds(ee.Geometry.Polygon(polygon))
-            .filterDate(dates[0], dates[1])
-        )
-        cloud_images_list = s2cloudless_col.getInfo().get("features", [])
+        collection_name = "COPERNICUS/S2_CLOUD_PROBABILITY"
+        collection = ee.ImageCollection(collection_name)
+        cloud_images_list = get_images_list_from_collection(collection, polygon, dates)
         # Extract image IDs from the s2cloudless collection
         cloud_indices = [
             image["properties"]["system:index"] for image in cloud_images_list
