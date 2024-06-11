@@ -43,7 +43,7 @@ polygon = SDS_tools.smallest_rectangle(polygon)
 dates = ['2023-12-01', '2024-01-31']
 # satellite missions
 # sat_list = ['L5','L7','L8']
-sat_list = ['L9']
+sat_list = ['L9','L8']
 collection = 'C02' # choose Landsat collection 'C01' or 'C02'
 # name of the site
 sitename = 'NARRA'
@@ -305,6 +305,7 @@ tides_ts = np.array(tide_data['tide'])
 
 # get tide levels corresponding to the time of image acquisition
 dates_sat = output['dates']
+dates_sat = pd.to_datetime(dates_sat)
 try:
     tides_sat = SDS_tools.get_closest_datapoint(dates_sat, dates_ts, tides_ts)
 except Exception as e:
@@ -314,7 +315,7 @@ except Exception as e:
 # plot the subsampled tide data
 fig, ax = plt.subplots(1,1,figsize=(15,4), tight_layout=True)
 ax.grid(which='major', linestyle=':', color='0.5')
-ax.plot(tide_data['dates'], tide_data['tide'], '-', color='0.6', label='all time-series')
+ax.plot(dates_ts, tides_ts, '-', color='0.6', label='all time-series')
 ax.plot(dates_sat, tides_sat, '-o', color='k', ms=6, mfc='w',lw=1, label='image acquisition')
 ax.set(ylabel='tide level [m]',xlim=[dates_sat[0],dates_sat[-1]], title='Water levels at the time of image acquisition')
 ax.legend()

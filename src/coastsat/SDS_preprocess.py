@@ -597,7 +597,7 @@ def preprocess_single(
     pan_off : boolean
         if True, disable panchromatic sharpening and ignore pan band
     collection: str
-        Landsat collection ,'C01' or 'C02'
+        Landsat collection 'C02'
     do_cloud_mask: boolean
         if True, apply the cloud mask to the image. If False, the cloud mask is not applied.
     s2cloudless_prob: float [0,100)
@@ -861,7 +861,7 @@ def create_cloud_mask(im_QA, satname, cloud_mask_issue, collection):
         True if there is an issue with the cloud mask and sand pixels are being
         erroneously masked on the images
     collection: str
-        Landsat collection ,'C01' or 'C02'
+        Landsat collection 'C02' or deprecated 'C01'
 
     Returns:
     -----------

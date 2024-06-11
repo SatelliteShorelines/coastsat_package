@@ -332,10 +332,30 @@ def initialize_ee():
     except:
         ee.Initialize()
 
-def check_collection(collection):
-    if collection == "C01":
-        raise Exception("Collection 1 (C01) is not supported. Please use Collection 2 (C02).")
 
+def validate_collection(inputs: dict):
+    """
+    Validates the Landsat collection specified in the inputs dictionary is C02
+
+    Args:
+        inputs (dict): A dictionary containing the input parameters.
+        Should contain the key 'landsat_collection' with the Landsat collection name.
+
+    Returns:
+        dict: The updated inputs dictionary with the Landsat collection validated.
+
+    Raises:
+        ValueError: If the Landsat collection is invalid.
+    """
+    if inputs.get("landsat_collection") == "C01":
+        print(f"Google has deprecated the {inputs['landsat_collection']} collection, switching to C02.\n Learn more: https://developers.google.com/earth-engine/landsat_c1_to_c2")
+        # change the inputs settings to C02
+        inputs["landsat_collection"] = "C02"
+    elif inputs.get("landsat_collection") != "C02":
+        raise ValueError(f"Invalid Landsat collection: {inputs.get('landsat_collection')}. Choose 'C02'.")
+    return inputs
+            
+            
 def filter_images_by_month(im_list, satname, months_list,**kwargs):
     """
     Removes from the EE collection very cloudy images (>95% cloud cover)
@@ -404,6 +424,7 @@ def get_image_info(collection, satname, polygon, dates, scene_cloud_cover:float=
     im_list: list of ee.Image objects
         list with the info for the images
     """
+    start_date, end_date = dates
     # Convert to strings if necessary
     if isinstance(start_date, datetime):
         start_date = start_date.strftime('%Y-%m-%d')
@@ -670,6 +691,9 @@ def retrieve_images(
     logger = setup_logger(im_folder)
     # initialise connection with GEE server
     ee.Initialize()
+    
+    # validates the inputs have references the correct collection (C02)
+    inputs = validate_collection(inputs)
 
     # check image availabiliy and retrieve list of images
     im_dict_T1, im_dict_T2 = check_images_available(inputs,months_list,scene_cloud_cover)
@@ -684,6 +708,7 @@ def retrieve_images(
         im_dict_s2cloudless = get_s2cloudless(im_dict_T1["S2"], inputs)
 
     # bands for each mission
+    # this is deprecated
     if inputs["landsat_collection"] == "C01":
         qa_band_Landsat = "BQA"
     elif inputs["landsat_collection"] == "C02":
@@ -691,7 +716,7 @@ def retrieve_images(
     else:
         raise Exception(
             "Landsat collection %s does not exist, " % inputs["landsat_collection"]
-            + "choose C01 or C02."
+            + "choose C02."
         )
     bands_dict = {
         "L5": ["B1", "B2", "B3", "B4", "B5", qa_band_Landsat],
@@ -904,11 +929,6 @@ def retrieve_images(
                         fp_ms = filepaths[1]
                         fp_pan = filepaths[2]
                         fp_mask = filepaths[3]
-                        # if C01 is selected, for images after 2022 adjust the name of the QA band
-                        # as the name has changed for Collection 2 images (from BQA to QA_PIXEL)
-                        if inputs["landsat_collection"] == "C01":
-                            if not "BQA" in [_["id"] for _ in im_bands]:
-                                bands_id[-1] = "QA_PIXEL"
                         # select bands (multispectral and panchromatic)
                         bands["ms"] = [
                             im_bands[_]
@@ -1534,7 +1554,7 @@ def remove_existing_imagery(image_dict:dict, metadata:dict,sat_list:list[str])->
 def check_images_available(inputs,months_list=None,scene_cloud_cover=0.95):
     """
     Scan the GEE collections to see how many images are available for each
-     satellite mission (L5,L7,L8,L9,S2), collection (C01,C02) and tier (T1,T2).
+     satellite mission (L5,L7,L8,L9,S2), collection (C02) and tier (T1,T2).
 
      KV WRL 2018
 
@@ -1566,9 +1586,12 @@ def check_images_available(inputs,months_list=None,scene_cloud_cover=0.95):
     if dates[1] <= dates[0]:
         raise Exception("Verify that your dates are in the correct chronological order")
 
+    # validates the inputs have references the correct collection (C02)
+    inputs = validate_collection(inputs)
+
     # check if EE was initialised or not
     try:
-        ee.ImageCollection("LANDSAT/LT05/C01/T1_TOA")
+        ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA")
     except:
         ee.Initialize()
 
@@ -1577,6 +1600,7 @@ def check_images_available(inputs,months_list=None,scene_cloud_cover=0.95):
         end="\n",
     )
 
+    # CREATES A DICTIONARY OF SATELLITES CONTAINING THE IMAGES IN TIER 1 IN COLLECTION C02
     # get images in Landsat Tier 1 as well as Sentinel Level-1C
     print("- In Landsat Tier 1 & Sentinel-2 Level-1C:")
     col_names_T1 = {
@@ -1597,24 +1621,7 @@ def check_images_available(inputs,months_list=None,scene_cloud_cover=0.95):
         print("     %s: %d images" % (satname, len(im_list)))
         im_dict_T1[satname] = im_list
 
-    # CREATES A DICTIONARY OF SATELLITES CONTAINING THE IMAGES IN TIER 1 IN COLLECTION C01 AND C02
-    # if using C01 (only goes to the end of 2021), complete with C02 for L7 and L8
-    if dates[1] > datetime(2022, 1, 1) and inputs["landsat_collection"] == "C01":
-        print("  -> completing Tier 1 with C02 after %s..." % "2022-01-01")
-        col_names_C02 = {
-            "L7": "LANDSAT/LE07/C02/T1_TOA",
-            "L8": "LANDSAT/LC08/C02/T1_TOA",
-        }
-        dates_C02 = ["2022-01-01", dates_str[1]]
-        for satname in inputs["sat_list"]:
-            # L7 and L8 have images in both C01 and C02, so complete each list with the other collection
-            if satname not in ["L7", "L8"]:
-                continue
-            im_list=get_image_info(col_names_C02[satname], satname, polygon, dates_C02,S2tile=inputs.get("S2tile", ""), scene_cloud_cover=scene_cloud_cover,months_list= months_list)
-            print("     %s: %d images" % (satname, len(im_list)))
-            im_dict_T1[satname] += im_list
-            
-    # if the directory already exists, remove the images that already exist
+    # if the directory already exists, remove the images that already exist from the download request
     filepath = os.path.join(inputs['filepath'],inputs['sitename'])
     if os.path.exists(filepath):
         # get the metadata and satellites that need to be filtered
@@ -1650,22 +1657,6 @@ def check_images_available(inputs,months_list=None,scene_cloud_cover=0.95):
         print("     %s: %d images" % (satname, len(im_list)))
         im_dict_T2[satname] = im_list
 
-    # also complete with C02 for L7 and L8 after 2022
-    if dates[1] > datetime(2022, 1, 1) and inputs["landsat_collection"] == "C01":
-        print("  -> completing Tier 2 with C02 after %s..." % "2022-01-01")
-        col_names_C02 = {
-            "L7": "LANDSAT/LE07/C02/T2_TOA",
-            "L8": "LANDSAT/LC08/C02/T2_TOA",
-        }
-        dates_C02 = ["2022-01-01", dates_str[1]]
-        for satname in inputs["sat_list"]:
-            # L7 and L8 have images in both C01 and C02, so complete each list with the other collection
-            if satname not in ["L7", "L8"]:
-                continue  # only L7 and L8
-            im_list=get_image_info(col_names_C02[satname], satname, polygon, dates_C02,S2tile=inputs.get("S2tile", ""), scene_cloud_cover=scene_cloud_cover,months_list= months_list)
-            sum_img = sum_img + len(im_list)
-            print("     %s: %d images" % (satname, len(im_list)))
-            im_dict_T2[satname] += im_list
 
     print("  Total images available to download from Tier 2: %d images" % sum_img)
     return im_dict_T1, im_dict_T2
@@ -2354,7 +2345,7 @@ def merge_overlapping_images(metadata, inputs):
                     im_extra,
                     im_QA,
                     im_nodata,
-                ) = SDS_preprocess.preprocess_single(fn_im[index], sat, False, "C01")
+                ) = SDS_preprocess.preprocess_single(fn_im[index], sat, False, "C02")
                 # in Sentinel2 images close to the edge of the image there are some artefacts,
                 # that are squares with constant pixel intensities. They need to be masked in the
                 # raster (GEOTIFF). It can be done using the image standard deviation, which
