@@ -1,14 +1,34 @@
 # CoastSat-Package
 
-This is coastsat-package the pip and conda package extension of [CoastSat](https://github.com/kvos/CoastSat). CoastSat-package is a slightly modified version of coastsat to make it compatible with [CoastSeg](https://github.com/Doodleverse/CoastSeg).
+This is coastsat-package the pip and conda package extension of [CoastSat](https://github.com/kvos/CoastSat). CoastSat-package is a slightly modified version of coastsat to make it compatible with [CoastSeg](https://github.com/Doodleverse/CoastSeg). The CoastSeg team actively maintains coastsat-package and we welcome all contributions to improve the package.
 
-## What's Changed?
+## Modifications and Improvements
 
-- JPGs for RGB, NIR,and SWIR are created within the jpg_files folder for each downloaded session
-- Extracted shorelines are saved as .json files instead of pkl files
-- The download progress bar shows which image is being downloaded and which stage of the download process the image is at
-- Users can turn on / off the cloud mask with the 'apply_cloud_mask' setting
-- Minor organizational changes to make CoastSat more organized and compatible to be packaged.
+Our recent updates to the coastsat-package were driven by the goal of enhancing functionality, user experience, and compatibility with CoastSeg. We aimed to streamline image handling, improve data accessibility, and provide more detailed feedback during the download process. Additionally, we introduced new features to allow more precise control over image processing and data collection. These enhancements also include better file organization and comprehensive shoreline extraction reports to ensure transparency and ease of use. Below is a detailed overview of these significant improvements and additions.
+
+
+- **Download Improvements** *(implemented in `SDS_download.py`)*
+  - **Detailed Download Progress**
+    - The download progress bar has been enhanced to show which image is being downloaded and the current stage of the download process, providing better feedback to users.
+  - **Image Download Filters**
+    - It is now possible to filter image downloads based on the months in which scenes were captured, as well as the percentage of cloud cover and no data in each scene, allowing for more precise and relevant data collection.
+    - Additional cloud filtering is handled by the function `remove_cloudy_images`. Filtering by months is done by the function `filter_images_by_month`, allowing for more precise and relevant data collection.
+  - **Configurable Cloud Mask**
+    - Users can now turn the cloud mask on or off using the `apply_cloud_mask` setting, offering more control over image processing for both extracting shorelines and downloading imagery.
+  - **Large Collection Downloads**
+    - Collections of over 5,000 images can now be downloaded without encountering a Google Earth Engine error, thanks to the function `get_images_list_from_collection`.
+  - **Enhanced Image Handling** 
+    - By default, JPGs for RGB, NIR, and SWIR bands are created and stored within the `jpg_files` folder for each downloaded session, ensuring easy access and organization.
+
+
+- **Shoreline Extraction Enhancements** *(implemented in `SDS_shoreline.py`)*
+  - **Shoreline Report Generation**
+    - When shorelines are extracted, a shoreline report (`shoreline_report.txt`) is generated that details how shorelines were extracted from each scene.
+  - **Improved File Formats** 
+    - Extracted shorelines are now saved as `.json` files instead of `.pkl` files, making them more accessible and easier to use with other applications.
+
+- **Organizational Enhancements**
+  - Minor organizational changes have been implemented to make CoastSat more structured and compatible with packaging standards, improving the overall usability and maintainability of the codebase.
 
 
 ## Install CoastSat with conda
