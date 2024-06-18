@@ -1,3 +1,4 @@
+# pylint: disable=line-too-long
 """
 This module contains all the functions needed for extracting satellite-derived 
 shorelines (SDS)
@@ -27,6 +28,7 @@ from pylab import ginput
 from shapely import geometry
 from shapely.geometry import LineString
 from skimage import filters, measure, morphology
+from shapely.geometry import Polygon, LineString, Point
 from tqdm.auto import tqdm
 
 # local application/library specific imports
@@ -38,31 +40,11 @@ from coastsat.classification import models, training_data, training_sites
 # set numpy error handling
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
-def arr_to_LineString(coords):
-    """
-    Makes a line feature from a list of xy tuples
-    inputs: coords
-    outputs: line
-    """
-    points = [None]*len(coords)
-    i=0
-    for xy in coords:
-        points[i] = shapely.geometry.Point(xy)
-        i=i+1
-    line = shapely.geometry.LineString(points)
-    return line
-
 def LineString_to_arr(line):
-    """
-    Makes an array from linestring
-    inputs: line
-    outputs: array of xy tuples
-    """
-    listarray = []
-    for pp in line.coords:
-        listarray.append(pp)
-    nparray = np.array(listarray)
-    return nparray
+    return np.array(line.coords)
+
+def arr_to_LineString(arr):
+    return LineString(arr)
 
 
 def convert_gdf_to_array(gdf: gpd.GeoDataFrame) -> list:
@@ -318,7 +300,6 @@ def create_gdf_from_type(
     return None
 
 
-
 def ref_poly_filter(ref_poly_gdf:gpd.GeoDataFrame, raw_shorelines_gdf:gpd.GeoDataFrame)->gpd.GeoDataFrame:
     """
     Filters shorelines that are within a reference polygon.
@@ -333,45 +314,24 @@ def ref_poly_filter(ref_poly_gdf:gpd.GeoDataFrame, raw_shorelines_gdf:gpd.GeoDat
     """
     if ref_poly_gdf.empty:
         return raw_shorelines_gdf
-    
-    ##First need to get rid of lines that are completely outside of the ref polygon
-    ref_polygon = ref_poly_gdf.geometry
-    buffer_vals = [None]*len(raw_shorelines_gdf)
-    for i in range(len(raw_shorelines_gdf)):
-        line_entry = raw_shorelines_gdf.iloc[i]
-        line = line_entry.geometry
-        # if any of the polygons intersect with the line, then it is within the buffer
-        bool_val = np.any(ref_polygon.intersects(line).values)
-        buffer_vals[i] = bool_val
-    # add whether the line is within the buffer to the GeoDataFrame
-    raw_shorelines_gdf['buffer_vals'] = buffer_vals
-    # filter out lines that are not within the buffer
-    shorelines_gdf_filter = raw_shorelines_gdf[raw_shorelines_gdf['buffer_vals']]
 
-    ##Now get rid of points that lie outside ref polygon but preserve the rest of the shoreline
-    new_lines = [None]*len(shorelines_gdf_filter)
-    for i in range(len(shorelines_gdf_filter)):
-        line_entry = shorelines_gdf_filter.iloc[i]
-        line = line_entry.geometry
+    ref_polygon = ref_poly_gdf.geometry.unary_union  # Combine all polygons into a single MultiPolygon if needed
+
+    # Filter out lines that do not intersect the reference polygon
+    raw_shorelines_gdf = raw_shorelines_gdf[raw_shorelines_gdf.intersects(ref_polygon)]
+
+    def filter_points_within_polygon(line):
         line_arr = LineString_to_arr(line)
-        bool_vals = [None]*len(line_arr)
-        j = 0
-        for point in line_arr:
-            point = geometry.Point(point)
-            contains_series = ref_polygon.contains(point)
-            # if the point is within any of the polygons, then it is within the buffer
-            bool_val = contains_series.any()
-            bool_vals[j] = bool_val
-            j=j+1
+        bool_vals = [ref_polygon.contains(Point(point)) for point in line_arr]
         new_line_arr = line_arr[bool_vals]
-        new_line_LineString = arr_to_LineString(new_line_arr)
-        new_lines[i] = new_line_LineString
+        if len(new_line_arr) < 3:
+            return None
+        return arr_to_LineString(new_line_arr)
 
-    ##Assign the new geometries, save the output
-    shorelines_gdf_filter['geometry'] = new_lines
-    shorelines_gdf_filter = shorelines_gdf_filter.drop(columns=['buffer_vals'])
+    raw_shorelines_gdf.loc[:, 'geometry'] = raw_shorelines_gdf['geometry'].apply(filter_points_within_polygon)
+    raw_shorelines_gdf = raw_shorelines_gdf.dropna(subset=['geometry'])
 
-    return shorelines_gdf_filter
+    return raw_shorelines_gdf
 
 # Main function for batch shoreline detection
 def extract_shorelines(

@@ -680,15 +680,6 @@ def remove_inaccurate_georef(output, accuracy):
         else:
             if geoacc <= accuracy:
                 idx.append(i)
-
-    # # find indices of shorelines to be removed
-    # idx = np.where(
-    #     ~np.logical_or(
-    #         np.array(output["geoaccuracy"]) == -1,
-    #         np.array(output["geoaccuracy"]) >= accuracy,
-    #     )
-    # )[0]
-    # idx = np.where(~(np.array(output['geoaccuracy']) >= accuracy))[0]
     output_filtered = dict([])
     for key in output.keys():
         output_filtered[key] = [output[key][i] for i in idx]
