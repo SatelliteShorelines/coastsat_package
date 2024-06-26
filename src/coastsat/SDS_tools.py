@@ -3,6 +3,7 @@ This module contains utilities to work with satellite images
     
 Author: Kilian Vos, Water Research Laboratory, University of New South Wales
 """
+
 # Standard library imports
 import os
 from datetime import datetime, timedelta
@@ -26,7 +27,6 @@ import pytz
 import pdb
 
 
-
 # np.seterr(all='ignore') # raise/ignore divisions by 0 and nans
 
 ###################################################################################################
@@ -34,7 +34,7 @@ import pdb
 ###################################################################################################
 
 
-def convert_pix2world(points:np.array, georef:np.array):
+def convert_pix2world(points: np.array, georef: np.array):
     """
     Converts pixel coordinates (pixel row and column) to world projected
     coordinates performing an affine transformation.
@@ -85,28 +85,19 @@ def convert_pix2world(points:np.array, georef:np.array):
     return points_converted
 
 
-def convert_world2pix(points, georef):
+def convert_world2pix(
+    points: list[np.ndarray] | np.ndarray, georef: np.ndarray
+) -> list[np.ndarray] | np.ndarray:
     """
-    Converts world projected coordinates (X,Y) to image coordinates
-    (pixel row and column) performing an affine transformation.
+    Converts world coordinates to pixel coordinates.
 
-    KV WRL 2018
-
-    Arguments:
-    -----------
-    points: np.array or list of np.array
-        array with 2 columns (X,Y)
-    georef: np.array
-        vector of 6 elements [Xtr, Xscale, Xshear, Ytr, Yshear, Yscale]
+    Args:
+        points (list[np.ndarray] | np.ndarray): List of points or array of points in world coordinates.
+        georef (np.ndarray): Georeference information.
 
     Returns:
-    -----------
-    points_converted: np.array or list of np.array
-        converted coordinates (pixel row and column)
-
+        list[np.ndarray] | np.ndarray: Converted points in pixel coordinates.
     """
-
-    # make affine transformation matrix
     aff_mat = np.array(
         [
             [georef[1], georef[2], georef[0]],
@@ -114,24 +105,16 @@ def convert_world2pix(points, georef):
             [0, 0, 1],
         ]
     )
-    # create affine transformation
     tform = transform.AffineTransform(aff_mat)
-
-    # if list of arrays
-    if type(points) is list:
-        points_converted = []
-        # iterate over the list
-        for i, arr in enumerate(points):
-            points_converted.append(tform.inverse(points))
-
-    # if single array
-    elif type(points) is np.ndarray:
+    if isinstance(points, list):
+        points_converted = [
+            tform.inverse(arr[:, :2]) if arr.ndim == 2 else tform.inverse(arr)
+            for arr in points
+        ]
+    elif isinstance(points, np.ndarray):
         points_converted = tform.inverse(points)
-
     else:
-        print("invalid input type")
-        raise
-
+        raise ValueError("Invalid input type")
     return points_converted
 
 
@@ -596,9 +579,10 @@ def remove_duplicates(output):
     # find the pairs of images that are within 5 minutes of each other
     time_delta = 5 * 60  # 5 minutes in seconds
     pairs = []
+    dummy_date_start = datetime(1970, 1, 1, tzinfo=pytz.utc)
     for i, date in enumerate(dates):
         # dummy value so it does not match it again
-        dates[i] = pytz.utc.localize(datetime(1, 1, 1) + timedelta(days=i + 1))
+        dates[i] = dummy_date_start + timedelta(days=i + 1)
         # calculate time difference
         time_diff = np.array([np.abs((date - _).total_seconds()) for _ in dates])
         # find the matching times and add to pairs list
@@ -625,6 +609,10 @@ def remove_duplicates(output):
                 idx_remove.append(pair[np.where(empty_bool)[0][0]])
             else:  # remove the shorter shoreline and keep the longer one
                 satnames = [output["satname"][_] for _ in pair]
+                print(f"satnames: {satnames}")
+                if isinstance(satnames, pd.Series):
+                    satnames = satnames.tolist()
+
                 # keep Landsat 9 if it duplicates Landsat 7
                 if "L9" in satnames and "L7" in satnames:
                     idx_remove.append(
@@ -648,6 +636,84 @@ def remove_duplicates(output):
     else:
         print("0 duplicates")
         return output
+
+
+# def remove_duplicates(output):
+#     """
+#     Function to remove from the output dictionnary entries containing shorelines for
+#     the same date and satellite mission. This happens when there is an overlap
+#     between adjacent satellite images.
+
+#     KV WRL 2020
+
+#     Arguments:
+#     -----------
+#         output: dict
+#             contains output dict with shoreline and metadata
+
+#     Returns:
+#     -----------
+#         output_no_duplicates: dict
+#             contains the updated dict where duplicates have been removed
+
+#     """
+#     # remove duplicates
+#     dates = output["dates"].copy()
+#     # find the pairs of images that are within 5 minutes of each other
+#     time_delta = 5 * 60  # 5 minutes in seconds
+#     pairs = []
+#     for i, date in enumerate(dates):
+#         # dummy value so it does not match it again
+#         dates[i] = pytz.utc.localize(datetime(1, 1, 1) + timedelta(days=i + 1))
+#         # calculate time difference
+#         time_diff = np.array([np.abs((date - _).total_seconds()) for _ in dates])
+#         # find the matching times and add to pairs list
+#         boolvec = time_diff <= time_delta
+#         if np.sum(boolvec) == 0:
+#             continue
+#         else:
+#             idx_dup = np.where(boolvec)[0][0]
+#             pairs.append([i, idx_dup])
+
+#     # if there are duplicates, only keep the longest shoreline
+#     if len(pairs) > 0:
+#         # initialise variables
+#         output_no_duplicates = dict([])
+#         idx_remove = []
+#         # for each pair
+#         for pair in pairs:
+#             # check if any of the shorelines are empty
+#             empty_bool = [(len(output["shorelines"][_]) < 2) for _ in pair]
+#             if np.all(empty_bool):  # if both empty remove both
+#                 idx_remove.append(pair[0])
+#                 idx_remove.append(pair[1])
+#             elif np.any(empty_bool):  # if one empty remove that one
+#                 idx_remove.append(pair[np.where(empty_bool)[0][0]])
+#             else:  # remove the shorter shoreline and keep the longer one
+#                 satnames = [output["satname"][_] for _ in pair]
+#                 # keep Landsat 9 if it duplicates Landsat 7
+#                 if "L9" in satnames and "L7" in satnames:
+#                     idx_remove.append(
+#                         pair[np.where([_ == "L7" for _ in satnames])[0][0]]
+#                     )
+#                 else:  # keep the longest shorelines
+#                     sl0 = geometry.LineString(output["shorelines"][pair[0]])
+#                     sl1 = geometry.LineString(output["shorelines"][pair[1]])
+#                     if sl0.length >= sl1.length:
+#                         idx_remove.append(pair[1])
+#                     else:
+#                         idx_remove.append(pair[0])
+#         # create a new output structure with all the duplicates removed
+#         idx_remove = sorted(idx_remove)
+#         idx_all = np.linspace(0, len(dates) - 1, len(dates)).astype(int)
+#         idx_keep = list(np.where(~np.isin(idx_all, idx_remove))[0])
+#         for key in output.keys():
+#             output_no_duplicates[key] = [output[key][i] for i in idx_keep]
+#         print("%d duplicates" % len(idx_remove))
+#         return output_no_duplicates
+#     else:
+#         print("0 duplicates")
+#         return output
 
 
 def remove_inaccurate_georef(output, accuracy):
@@ -795,26 +861,27 @@ def get_closest_datapoint(dates, dates_ts, values_ts):
 def polygon_from_geojson(fn):
     """
     Extracts coordinates from a .kml file.
-    
+
     KV WRL 2023
 
     Arguments:
     -----------
     fn: str
-        filepath + filename of the geojson file to be read          
-                
-    Returns:    
+        filepath + filename of the geojson file to be read
+
+    Returns:
     -----------
     polygon: list
         coordinates extracted from the .geojson file
-        
-    """    
-    
+
+    """
+
     # read .geojson file
-    gdf = gpd.read_file(fn,driver='GeoJSON')
-    coords = np.array(gdf.iloc[0]['geometry'].exterior.coords)
+    gdf = gpd.read_file(fn, driver="GeoJSON")
+    coords = np.array(gdf.iloc[0]["geometry"].exterior.coords)
     polygon = [[[_[0], _[1]] for _ in coords]]
     return polygon
+
 
 def polygon_from_kml(fn):
     """
@@ -1178,18 +1245,23 @@ def smallest_rectangle(polygon):
     polygon_rect = [[[_[0], _[1]] for _ in coords_polygon]]
     return polygon_rect
 
+
 def make_animation_mp4(filepath_images, fps, fn_out):
     "function to create an animation with the saved figures"
     import imageio
-    
-    with imageio.get_writer(fn_out, mode='I', fps=fps) as writer:
+
+    with imageio.get_writer(fn_out, mode="I", fps=fps) as writer:
         filenames = os.listdir(filepath_images)
         # order chronologically
         filenames = np.sort(filenames)
         for i in range(len(filenames)):
-            image = imageio.imread(os.path.join(filepath_images,filenames[i]))
+            image = imageio.imread(os.path.join(filepath_images, filenames[i]))
             writer.append_data(image)
-    print('Animation has been generated (using %d frames per second) and saved at %s'%(fps,fn_out))
+    print(
+        "Animation has been generated (using %d frames per second) and saved at %s"
+        % (fps, fn_out)
+    )
+
 
 def compare_timeseries(ts, gt, key, settings):
     if key not in gt.keys():
@@ -1375,8 +1447,8 @@ def ordinal(n: int):
 
     """
     if 11 <= (n % 100) <= 13:
-        suffix = 'th'
+        suffix = "th"
     else:
-        suffix = ['th','st','nd','rd','th'][min(n % 10, 4)]
+        suffix = ["th", "st", "nd", "rd", "th"][min(n % 10, 4)]
     ordnum = str(n) + suffix
     return ordnum

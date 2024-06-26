@@ -26,7 +26,7 @@ from tqdm.auto import tqdm
 
 # Global variables
 DAYS_IN_YEAR = 365.2425
-SECONDS_IN_DAY = 24*3600
+SECONDS_IN_DAY = 24 * 3600
 
 ###################################################################################################
 # DRAW/LOAD TRANSECTS
@@ -272,9 +272,20 @@ def compute_intersection(output, transects, settings):
     return cross_dist
 
 
-def compute_intersection_QC(output, transects, settings, use_progress_bar: bool = True):
+def compute_intersection_QC(
+    output,
+    transects,
+    along_dist=25,
+    min_points=3,
+    max_std=15,
+    max_range=30,
+    min_chainage=-100,
+    multiple_inter="auto",
+    prc_multiple=0.1,
+    use_progress_bar: bool = True,
+):
     """
-    More advanced function to omputes the intersection between the 2D mapped shorelines
+    More advanced function to compute the intersection between the 2D mapped shorelines
     and the transects. Produces more quality-controlled time-series of shoreline change.
 
     Arguments:
@@ -284,176 +295,298 @@ def compute_intersection_QC(output, transects, settings, use_progress_bar: bool 
         transects: dict
             contains the X and Y coordinates of the transects (first and last point needed for each
             transect).
-        settings: dict
-                'along_dist': int (in metres)
-                    alongshore distance to caluclate the intersection (median of points
-                    within this distance).
-                'min_points': int
-                    minimum number of shoreline points to calculate an intersections
-                'max_std': int (in metres)
-                    maximum std for the shoreline points when calculating the median,
-                    if above this value then NaN is returned for the intersection
-                'max_range': int (in metres)
-                    maximum range  for the shoreline points when calculating the median,
-                    if above this value then NaN is returned for the intersection
-                'min_chainage': int (in metres)
-                    furthest landward of the transect origin that an intersection is
-                    accepted, beyond this point a NaN is returned
-                'multiple_inter': mode for removing outliers ('auto', 'nan', 'max')
-                'prc_multiple': percentage to use in 'auto' mode to switch from 'nan' to 'max'
-
+        along_dist: int (in metres)
+            alongshore distance to calculate the intersection (median of points
+            within this distance).
+        min_points: int
+            minimum number of shoreline points to calculate an intersection.
+        max_std: int (in metres)
+            maximum std for the shoreline points when calculating the median,
+            if above this value then NaN is returned for the intersection.
+        max_range: int (in metres)
+            maximum range for the shoreline points when calculating the median,
+            if above this value then NaN is returned for the intersection.
+        min_chainage: int (in metres)
+            furthest landward of the transect origin that an intersection is
+            accepted, beyond this point a NaN is returned.
+        multiple_inter: mode for removing outliers ('auto', 'nan', 'max').
+        prc_multiple: float, optional
+            percentage to use in 'auto' mode to switch from 'nan' to 'max'.
         use_progress_bar(bool,optional). Defaults to True. If true uses tqdm to display the progress for iterating through transects.
-        False, means no progress bar is displayed
+            False, means no progress bar is displayed.
 
     Returns:
     -----------
         cross_dist: dict
             time-series of cross-shore distance along each of the transects. These are not tidally
             corrected.
-
     """
 
-    # initialise dictionary with intersections for each transect
-    cross_dist = dict([])
+    cross_dist = {}
 
     shorelines = output["shorelines"]
-    along_dist = settings["along_dist"]
-
-    # loop through each transect
-    transect_keys = transects.keys()
+    transect_keys = list(transects.keys())
     if use_progress_bar:
         transect_keys = tqdm(
             transect_keys, desc="Computing transect shoreline intersections"
         )
 
     for key in transect_keys:
-        # initialise variables
-        std_intersect = np.zeros(len(shorelines))
-        med_intersect = np.zeros(len(shorelines))
-        max_intersect = np.zeros(len(shorelines))
-        min_intersect = np.zeros(len(shorelines))
-        n_intersect = np.zeros(len(shorelines))
+        std_intersect = np.full(len(shorelines), np.nan)
+        med_intersect = np.full(len(shorelines), np.nan)
+        max_intersect = np.full(len(shorelines), np.nan)
+        min_intersect = np.full(len(shorelines), np.nan)
+        n_intersect = np.full(len(shorelines), np.nan)
 
-        # loop through each shoreline
-        for i in range(len(shorelines)):
-            sl = shorelines[i]
+        transect_start = transects[key][0, :]
+        transect_end = transects[key][-1, :]
+        transect_vector = transect_end - transect_start
+        transect_length = np.linalg.norm(transect_vector)
+        transect_unit_vector = transect_vector / transect_length
+        rotation_matrix = np.array(
+            [
+                [transect_unit_vector[0], transect_unit_vector[1]],
+                [-transect_unit_vector[1], transect_unit_vector[0]],
+            ]
+        )
 
-            # in case there are no shoreline points
-            if len(sl) == 0:
-                std_intersect[i] = np.nan
-                med_intersect[i] = np.nan
-                max_intersect[i] = np.nan
-                min_intersect[i] = np.nan
-                n_intersect[i] = np.nan
+        for i, shoreline in enumerate(shorelines):
+            if len(shoreline) == 0:
                 continue
 
-            # compute rotation matrix
-            X0 = transects[key][0, 0]
-            Y0 = transects[key][0, 1]
-            temp = np.array(transects[key][-1, :]) - np.array(transects[key][0, :])
-            phi = np.arctan2(temp[1], temp[0])
-            Mrot = np.array([[np.cos(phi), np.sin(phi)], [-np.sin(phi), np.cos(phi)]])
+            shoreline_shifted = shoreline - transect_start
+            shoreline_rotated = np.dot(rotation_matrix, shoreline_shifted.T).T
 
-            # calculate point to line distance between shoreline points and the transect
-            p1 = np.array([X0, Y0])
-            p2 = transects[key][-1, :]
-            d_line = np.abs(np.cross(p2 - p1, sl - p1) / np.linalg.norm(p2 - p1))
-            # calculate the distance between shoreline points and the origin of the transect
-            d_origin = np.array([np.linalg.norm(sl[k, :] - p1) for k in range(len(sl))])
-            # find the shoreline points that are close to the transects and to the origin
-            # the distance to the origin is hard-coded here to 1 km
-            idx_dist = np.logical_and(d_line <= along_dist, d_origin <= 1000)
-            idx_close = np.where(idx_dist)[0]
+            d_line = np.abs(shoreline_rotated[:, 1])
+            d_origin = np.linalg.norm(shoreline_shifted, axis=1)
+            print(f"d_line: {d_line}")
+            print(f"along_dist: {along_dist}")
+            idx_close = (d_line <= along_dist) & (d_origin <= 1000)
 
-            # in case there are no shoreline points close to the transect
-            if len(idx_close) == 0:
-                std_intersect[i] = np.nan
-                med_intersect[i] = np.nan
-                max_intersect[i] = np.nan
-                min_intersect[i] = np.nan
-                n_intersect[i] = np.nan
-            else:
-                # change of base to shore-normal coordinate system
-                xy_close = np.array([sl[idx_close, 0], sl[idx_close, 1]]) - np.tile(
-                    np.array([[X0], [Y0]]), (1, len(sl[idx_close]))
-                )
-                xy_rot = np.matmul(Mrot, xy_close)
-                # remove points that are too far landwards relative to the transect origin (i.e., negative chainage)
-                xy_rot[0, xy_rot[0, :] < settings["min_chainage"]] = np.nan
+            if not np.any(idx_close):
+                continue
 
-                # compute std, median, max, min of the intersections
-                if not np.all(np.isnan(xy_rot[0, :])):
-                    std_intersect[i] = np.nanstd(xy_rot[0, :])
-                    med_intersect[i] = np.nanmedian(xy_rot[0, :])
-                    max_intersect[i] = np.nanmax(xy_rot[0, :])
-                    min_intersect[i] = np.nanmin(xy_rot[0, :])
-                    n_intersect[i] = len(xy_rot[0, :])
-                else:
-                    std_intersect[i] = np.nan
-                    med_intersect[i] = np.nan
-                    max_intersect[i] = np.nan
-                    min_intersect[i] = np.nan
-                    n_intersect[i] = 0
+            valid_points = shoreline_rotated[idx_close, 0]
+            valid_points = valid_points[valid_points >= min_chainage]
 
-        # quality control the intersections using dispersion metrics (std and range)
-        condition1 = std_intersect <= settings["max_std"]
-        condition2 = (max_intersect - min_intersect) <= settings["max_range"]
-        condition3 = n_intersect >= settings["min_points"]
-        idx_good = np.logical_and(np.logical_and(condition1, condition2), condition3)
+            if np.sum(~np.isnan(valid_points)) < min_points:
+                continue
 
-        # save copy for QA plot later
-        # med_intersect_temp = med_intersect.copy()
-        # max_intersect_temp = max_intersect.copy()
+            std_intersect[i] = np.nanstd(valid_points)
+            med_intersect[i] = np.nanmedian(valid_points)
+            max_intersect[i] = np.nanmax(valid_points)
+            min_intersect[i] = np.nanmin(valid_points)
+            n_intersect[i] = np.sum(~np.isnan(valid_points))
 
-        # decide what to do with the intersections with high dispersion
-        if settings["multiple_inter"] == "auto":
-            # compute the percentage of data points where the std is larger than the user-defined max
-            prc_over = np.sum(std_intersect > settings["max_std"]) / len(std_intersect)
-            # if more than a certain percentage is above, use the maximum intersection
-            
-            prc_multiple = settings.get("prc_multiple")
-            if prc_multiple is None:
-                prc_multiple = settings.get("auto_prc")
-                if prc_multiple is None:
-                    raise KeyError("Neither 'prc_multiple' nor 'auto_prc' exist in the settings.")
-            
+        condition1 = std_intersect <= max_std
+        condition2 = (max_intersect - min_intersect) <= max_range
+        condition3 = n_intersect >= min_points
+        idx_good = condition1 & condition2 & condition3
+
+        if multiple_inter == "auto":
+            prc_over = np.sum(std_intersect > max_std) / len(std_intersect)
             if prc_over > prc_multiple:
                 med_intersect[~idx_good] = max_intersect[~idx_good]
                 med_intersect[~condition3] = np.nan
-            # otherwise put a nan
             else:
                 med_intersect[~idx_good] = np.nan
-
-        elif settings["multiple_inter"] == "max":
+        elif multiple_inter == "max":
             med_intersect[~idx_good] = max_intersect[~idx_good]
             med_intersect[~condition3] = np.nan
-            prc_over = 0
-
-        elif settings["multiple_inter"] == "nan":
+        elif multiple_inter == "nan":
             med_intersect[~idx_good] = np.nan
-            prc_over = 0
-
         else:
-            raise Exception(
-                "the multiple_inter parameter can only be: nan, max or auto"
+            raise ValueError(
+                "The multiple_inter parameter can only be: nan, max, or auto."
             )
 
-        # store in dict
         cross_dist[key] = med_intersect
 
-        # plot for troubleshooting
-        # if settings['plot_fig']:
-        #     fig,ax=plt.subplots(1,1,figsize=[12,4])
-        #     fig.set_tight_layout(True)
-        #     ax.grid(linestyle=':', color='0.5')
-        #     ax.plot(output['dates'], med_intersect_temp, 'o-', c='0.6', ms=3, label='median')
-        #     ax.plot(output['dates'], max_intersect_temp, 'o-', c='g', ms=3, label='max')
-        #     ax.plot(output['dates'], cross_dist[key], 'o', c='r', ms=3, label='final')
-        #     ax.set_title('%s - %.2f'%(key, prc_over))
-        #     ax.legend(loc=3)
-        #     print('%s  - removed %d'%(key, sum(np.isnan(med_intersect))))
-
     return cross_dist
+
+
+# def compute_intersection_QC(output, transects, settings, use_progress_bar: bool = True):
+#     """
+#     More advanced function to omputes the intersection between the 2D mapped shorelines
+#     and the transects. Produces more quality-controlled time-series of shoreline change.
+
+#     Arguments:
+#     -----------
+#         output: dict
+#             contains the extracted shorelines and corresponding dates.
+#         transects: dict
+#             contains the X and Y coordinates of the transects (first and last point needed for each
+#             transect).
+#         settings: dict
+#                 'along_dist': int (in metres)
+#                     alongshore distance to caluclate the intersection (median of points
+#                     within this distance).
+#                 'min_points': int
+#                     minimum number of shoreline points to calculate an intersections
+#                 'max_std': int (in metres)
+#                     maximum std for the shoreline points when calculating the median,
+#                     if above this value then NaN is returned for the intersection
+#                 'max_range': int (in metres)
+#                     maximum range  for the shoreline points when calculating the median,
+#                     if above this value then NaN is returned for the intersection
+#                 'min_chainage': int (in metres)
+#                     furthest landward of the transect origin that an intersection is
+#                     accepted, beyond this point a NaN is returned
+#                 'multiple_inter': mode for removing outliers ('auto', 'nan', 'max')
+#                 'prc_multiple': percentage to use in 'auto' mode to switch from 'nan' to 'max'
+
+#         use_progress_bar(bool,optional). Defaults to True. If true uses tqdm to display the progress for iterating through transects.
+#         False, means no progress bar is displayed
+
+#     Returns:
+#     -----------
+#         cross_dist: dict
+#             time-series of cross-shore distance along each of the transects. These are not tidally
+#             corrected.
+
+#     """
+
+#     # initialise dictionary with intersections for each transect
+#     cross_dist = dict([])
+
+#     shorelines = output["shorelines"]
+#     along_dist = settings["along_dist"]
+
+#     # loop through each transect
+#     transect_keys = transects.keys()
+#     if use_progress_bar:
+#         transect_keys = tqdm(
+#             transect_keys, desc="Computing transect shoreline intersections"
+#         )
+
+#     for key in transect_keys:
+#         # initialise variables
+#         std_intersect = np.zeros(len(shorelines))
+#         med_intersect = np.zeros(len(shorelines))
+#         max_intersect = np.zeros(len(shorelines))
+#         min_intersect = np.zeros(len(shorelines))
+#         n_intersect = np.zeros(len(shorelines))
+
+#         # loop through each shoreline
+#         for i in range(len(shorelines)):
+#             sl = shorelines[i]
+
+#             # in case there are no shoreline points
+#             if len(sl) == 0:
+#                 std_intersect[i] = np.nan
+#                 med_intersect[i] = np.nan
+#                 max_intersect[i] = np.nan
+#                 min_intersect[i] = np.nan
+#                 n_intersect[i] = np.nan
+#                 continue
+
+#             # compute rotation matrix
+#             X0 = transects[key][0, 0]
+#             Y0 = transects[key][0, 1]
+#             temp = np.array(transects[key][-1, :]) - np.array(transects[key][0, :])
+#             phi = np.arctan2(temp[1], temp[0])
+#             Mrot = np.array([[np.cos(phi), np.sin(phi)], [-np.sin(phi), np.cos(phi)]])
+
+#             # calculate point to line distance between shoreline points and the transect
+#             p1 = np.array([X0, Y0])
+#             p2 = transects[key][-1, :]
+#             d_line = np.abs(np.cross(p2 - p1, sl - p1) / np.linalg.norm(p2 - p1))
+#             # calculate the distance between shoreline points and the origin of the transect
+#             d_origin = np.array([np.linalg.norm(sl[k, :] - p1) for k in range(len(sl))])
+#             # find the shoreline points that are close to the transects and to the origin
+#             # the distance to the origin is hard-coded here to 1 km
+#             idx_dist = np.logical_and(d_line <= along_dist, d_origin <= 1000)
+#             idx_close = np.where(idx_dist)[0]
+
+#             # in case there are no shoreline points close to the transect
+#             if len(idx_close) == 0:
+#                 std_intersect[i] = np.nan
+#                 med_intersect[i] = np.nan
+#                 max_intersect[i] = np.nan
+#                 min_intersect[i] = np.nan
+#                 n_intersect[i] = np.nan
+#             else:
+#                 # change of base to shore-normal coordinate system
+#                 xy_close = np.array([sl[idx_close, 0], sl[idx_close, 1]]) - np.tile(
+#                     np.array([[X0], [Y0]]), (1, len(sl[idx_close]))
+#                 )
+#                 xy_rot = np.matmul(Mrot, xy_close)
+#                 # remove points that are too far landwards relative to the transect origin (i.e., negative chainage)
+#                 xy_rot[0, xy_rot[0, :] < settings["min_chainage"]] = np.nan
+
+#                 # compute std, median, max, min of the intersections
+#                 if not np.all(np.isnan(xy_rot[0, :])):
+#                     std_intersect[i] = np.nanstd(xy_rot[0, :])
+#                     med_intersect[i] = np.nanmedian(xy_rot[0, :])
+#                     max_intersect[i] = np.nanmax(xy_rot[0, :])
+#                     min_intersect[i] = np.nanmin(xy_rot[0, :])
+#                     n_intersect[i] = len(xy_rot[0, :])
+#                 else:
+#                     std_intersect[i] = np.nan
+#                     med_intersect[i] = np.nan
+#                     max_intersect[i] = np.nan
+#                     min_intersect[i] = np.nan
+#                     n_intersect[i] = 0
+
+#         # quality control the intersections using dispersion metrics (std and range)
+#         condition1 = std_intersect <= settings["max_std"]
+#         condition2 = (max_intersect - min_intersect) <= settings["max_range"]
+#         condition3 = n_intersect >= settings["min_points"]
+#         idx_good = np.logical_and(np.logical_and(condition1, condition2), condition3)
+
+#         # save copy for QA plot later
+#         # med_intersect_temp = med_intersect.copy()
+#         # max_intersect_temp = max_intersect.copy()
+
+#         # decide what to do with the intersections with high dispersion
+#         if settings["multiple_inter"] == "auto":
+#             # compute the percentage of data points where the std is larger than the user-defined max
+#             prc_over = np.sum(std_intersect > settings["max_std"]) / len(std_intersect)
+#             # if more than a certain percentage is above, use the maximum intersection
+
+#             prc_multiple = settings.get("prc_multiple")
+#             if prc_multiple is None:
+#                 prc_multiple = settings.get("auto_prc")
+#                 if prc_multiple is None:
+#                     raise KeyError("Neither 'prc_multiple' nor 'auto_prc' exist in the settings.")
+
+#             if prc_over > prc_multiple:
+#                 med_intersect[~idx_good] = max_intersect[~idx_good]
+#                 med_intersect[~condition3] = np.nan
+#             # otherwise put a nan
+#             else:
+#                 med_intersect[~idx_good] = np.nan
+
+#         elif settings["multiple_inter"] == "max":
+#             med_intersect[~idx_good] = max_intersect[~idx_good]
+#             med_intersect[~condition3] = np.nan
+#             prc_over = 0
+
+#         elif settings["multiple_inter"] == "nan":
+#             med_intersect[~idx_good] = np.nan
+#             prc_over = 0
+
+#         else:
+#             raise Exception(
+#                 "the multiple_inter parameter can only be: nan, max or auto"
+#             )
+
+#         # store in dict
+#         cross_dist[key] = med_intersect
+
+#         # plot for troubleshooting
+#         # if settings['plot_fig']:
+#         #     fig,ax=plt.subplots(1,1,figsize=[12,4])
+#         #     fig.set_tight_layout(True)
+#         #     ax.grid(linestyle=':', color='0.5')
+#         #     ax.plot(output['dates'], med_intersect_temp, 'o-', c='0.6', ms=3, label='median')
+#         #     ax.plot(output['dates'], max_intersect_temp, 'o-', c='g', ms=3, label='max')
+#         #     ax.plot(output['dates'], cross_dist[key], 'o', c='r', ms=3, label='final')
+#         #     ax.set_title('%s - %.2f'%(key, prc_over))
+#         #     ax.legend(loc=3)
+#         #     print('%s  - removed %d'%(key, sum(np.isnan(med_intersect))))
+
+#     return cross_dist
 
 
 ###################################################################################################
@@ -814,10 +947,11 @@ def monthly_average(dates, chainages):
         np.array(season_ts),
     )
 
-def calculate_trend(dates,chainage):
+
+def calculate_trend(dates, chainage):
     "calculate long-term trend"
     dates_ord = np.array([_.toordinal() for _ in dates])
-    dates_ord = (dates_ord - np.min(dates_ord))/DAYS_IN_YEAR   
+    dates_ord = (dates_ord - np.min(dates_ord)) / DAYS_IN_YEAR
     trend, intercept, rvalue, pvalue, std_err = stats.linregress(dates_ord, chainage)
-    y = dates_ord*trend+intercept
+    y = dates_ord * trend + intercept
     return trend, y
