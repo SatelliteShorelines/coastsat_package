@@ -387,7 +387,7 @@ def compute_intersection_QC(output, transects, settings, use_progress_bar: bool 
                     med_intersect[i] = np.nanmedian(xy_rot[0, :])
                     max_intersect[i] = np.nanmax(xy_rot[0, :])
                     min_intersect[i] = np.nanmin(xy_rot[0, :])
-                    n_intersect[i] = len(xy_rot[0, :])
+                    n_intersect[i] = np.sum(~np.isnan(xy_rot[0, :])) # count only non-nan values
                 else:
                     std_intersect[i] = np.nan
                     med_intersect[i] = np.nan
