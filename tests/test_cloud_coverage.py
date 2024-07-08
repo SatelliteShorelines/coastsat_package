@@ -124,7 +124,7 @@ for satname in metadata.keys():
 
             #     # Create a legend
             #     labels = ["No Cloud (False)", "Cloud (True)"]
-            #     colors = [plt.cm.gray(0), plt.cm.gray(255)]  # Adjust these colors to match your colormap
+            #     colors = [plt.gray(0), plt.gray(255)]  # Adjust these colors to match your colormap
             #     patches = [mpatches.Patch(color=colors[i], label=labels[i]) for i in range(len(labels))]
             #     plt.legend(handles=patches)
             #     plt.show()
@@ -145,7 +145,7 @@ for satname in metadata.keys():
 
         #     # Create a legend
         #     labels = ["No Cloud (False)", "Cloud (True)"]
-        #     colors = [plt.cm.gray(0), plt.cm.gray(255)]  # Adjust these colors to match your colormap
+        #     colors = [plt.gray(0), plt.gray(255)]  # Adjust these colors to match your colormap
         #     patches = [mpatches.Patch(color=colors[i], label=labels[i]) for i in range(len(labels))]
         #     plt.legend(handles=patches)
         #     plt.show()

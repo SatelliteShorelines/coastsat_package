@@ -16,7 +16,6 @@ from typing import List, Union
 # related third party imports
 import geopandas as gpd
 import joblib
-import matplotlib.cm as cm
 import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -1348,7 +1347,7 @@ def show_detection(
 
     # compute classified image
     im_class = np.copy(im_RGB)
-    cmap = cm.get_cmap("tab20c")
+    cmap = plt.get_cmap("tab20c")
     colorpalette = cmap(np.arange(0, 13, 1))
     colours = np.zeros((3, 4))
     colours[0, :] = colorpalette[5]
@@ -1431,7 +1430,7 @@ def show_detection(
     ax1.set_title(sitename, fontweight="bold", fontsize=16)
 
     # color map for the reference shoreline buffer
-    masked_cmap = plt.cm.get_cmap("PiYG")
+    masked_cmap = plt.get_cmap("PiYG")
     # masked_cmap.set_bad(color="gray", alpha=0)
     # Create a masked array where False values are masked
     masked_array = None
@@ -1631,7 +1630,7 @@ def adjust_detection(
 
     # compute classified image
     im_class = np.copy(im_RGB)
-    cmap = cm.get_cmap("tab20c")
+    cmap = plt.get_cmap("tab20c")
     colorpalette = cmap(np.arange(0, 13, 1))
     colours = np.zeros((3, 4))
     colours[0, :] = colorpalette[5]
