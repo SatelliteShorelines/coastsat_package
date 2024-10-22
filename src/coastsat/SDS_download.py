@@ -26,7 +26,12 @@ import requests
 from urllib.request import urlretrieve
 import zipfile
 import shutil
-from osgeo import gdal
+# raise an error in case gdal is missing
+try:
+    from osgeo import gdal
+except ModuleNotFoundError as missing_gdal:
+    print(f"GDAL is not installed. Please install geopandas to get gdal run 'conda install -c conda-forge geopandas -y' ")
+    raise missing_gdal
 
 # additional modules
 from datetime import datetime, timedelta
@@ -95,6 +100,38 @@ def setup_logger(
     return logger
 
 
+def authenticate_and_initialize():
+    """
+    Authenticates and initializes the Earth Engine API.
+    This function handles the authentication and initialization process:
+        1. Try to use existing token to initialize
+        2. If 1 fails, try to refresh the token using Application Default Credentials
+        3. If 2 fails, authenticate manually via the web browser
+    """
+    # first try to initialize connection with GEE server with existing token
+    try: 
+        ee.Initialize()
+        print('GEE initialized (existing token).')
+    except:
+        # if token is expired, try to refresh it
+        # based on https://stackoverflow.com/questions/53472429/how-to-get-a-gcp-bearer-token-programmatically-with-python
+        try:
+            import google.auth
+            import google.auth.transport.requests
+            creds, project = google.auth.default()
+            # creds.valid is False, and creds.token is None
+            # refresh credentials to populate those
+            auth_req = google.auth.transport.requests.Request()
+            creds.refresh(auth_req)
+            # initialise GEE session with refreshed credentials
+            ee.Initialize(creds)
+            print('GEE initialized (refreshed token).')
+        except:
+            # get the user to authenticate manually and initialize the sesion
+            ee.Authenticate()
+            ee.Initialize()
+            print('GEE initialized (manual authentication).')
+
 # Custom exception classes
 class RequestSizeExceededError(Exception):
     pass
@@ -138,7 +175,6 @@ def retry(func):
 
 def debug_kill_wifi():
     import os
-
     os.system("netsh wlan disconnect")
 
 
@@ -335,7 +371,6 @@ def initialize_ee():
         ee.ImageCollection("LANDSAT/LT05/C02/T1_TOA")
     except:
         ee.Initialize()
-
 
 def validate_collection(inputs: dict):
     """
@@ -753,8 +788,11 @@ def retrieve_images(
         os.makedirs(im_folder)
     # Initialize the logger
     logger = setup_logger(im_folder)
+
     # initialise connection with GEE server
     ee.Initialize()
+    # initialise connection with GEE server
+    # authenticate_and_initialize()
     
     # validates the inputs have references the correct collection (C02)
     inputs = validate_collection(inputs)
@@ -771,24 +809,15 @@ def retrieve_images(
         # get s2cloudless collection
         im_dict_s2cloudless = get_s2cloudless(im_dict_T1["S2"], inputs)
 
-    # bands for each mission
-    # this is deprecated
-    if inputs["landsat_collection"] == "C01":
-        qa_band_Landsat = "BQA"
-    elif inputs["landsat_collection"] == "C02":
-        qa_band_Landsat = "QA_PIXEL"
-    else:
-        raise Exception(
-            "Landsat collection %s does not exist, " % inputs["landsat_collection"]
-            + "choose C02."
-        )
-    bands_dict = {
-        "L5": ["B1", "B2", "B3", "B4", "B5", qa_band_Landsat],
-        "L7": ["B1", "B2", "B3", "B4", "B5", qa_band_Landsat],
-        "L8": ["B2", "B3", "B4", "B5", "B6", qa_band_Landsat],
-        "L9": ["B2", "B3", "B4", "B5", "B6", qa_band_Landsat],
-        "S2": ["B2", "B3", "B4", "B8", "s2cloudless", "B11", "QA60"],
-    }
+    # QA band for each satellite mission
+    qa_band_Landsat = 'QA_PIXEL'
+    qa_band_S2 = 'QA60'
+    # the cloud mask band for Sentinel-2 images is the s2cloudless probability
+    bands_dict = {'L5':['B1','B2','B3','B4','B5',qa_band_Landsat],
+                  'L7':['B1','B2','B3','B4','B5',qa_band_Landsat],
+                  'L8':['B2','B3','B4','B5','B6',qa_band_Landsat],
+                  'L9':['B2','B3','B4','B5','B6',qa_band_Landsat],
+                  'S2':['B2','B3','B4','B8','s2cloudless','B11',qa_band_S2]}
     
     sat_list = inputs["sat_list"]
     dates = inputs["dates"]
@@ -1775,90 +1804,82 @@ def download_tif(
     Downloads an image in a file named data.tif
 
     """
+    # crop and download
+    download_id = ee.data.getDownloadId(
+        {
+            "image": image,
+            "region": polygon,
+            "bands": bands,
+            "filePerBand": True,
+            "name": "image",
+        }
+    )
+    response = requests.get(
+        ee.data.makeDownloadUrl(download_id),
+        timeout=(120, 120),  # 120 seconds to connect, 120 seconds to read
+    )
+    fp_zip = os.path.join(filepath, "temp.zip")
+    with open(fp_zip, "wb") as fd:
+        fd.write(response.content)
+    # unzip the individual bands
+    with zipfile.ZipFile(fp_zip) as local_zipfile:
+        for fn in local_zipfile.namelist():
+            local_zipfile.extract(fn, filepath)
+        fn_all = [os.path.join(filepath, _) for _ in local_zipfile.namelist()]
+    os.remove(fp_zip)
+    # now process the individual bands:
+    # - for Landsat
+    if satname in ["L5", "L7", "L8", "L9"]:
+        # if there is only one band, it's the panchromatic
+        if len(fn_all) == 1:
+            # return the filename of the .tif
+            return fn_all[0]
+        # otherwise there are multiple multispectral bands so we have to merge them into one .tif
+        else:
+            # select all ms bands except the QA band (which is processed separately)
+            fn_tifs = [_ for _ in fn_all if not "QA" in _]
+            filename = "ms_bands.tif"
+            # build a VRT and merge the bands (works the same with pan band)
+            outds = gdal.BuildVRT(
+                os.path.join(filepath, "temp.vrt"), fn_tifs, separate=True
+            )
+            outds = gdal.Translate(os.path.join(filepath, filename), outds)
+            # remove temporary files
+            os.remove(os.path.join(filepath, "temp.vrt"))
+            for _ in fn_tifs:
+                os.remove(_)
+            if os.path.exists(os.path.join(filepath, filename + ".aux.xml")):
+                os.remove(os.path.join(filepath, filename + ".aux.xml"))
+            # return file names (ms and QA bands separately)
+            fn_image = os.path.join(filepath, filename)
+            fn_QA = [_ for _ in fn_all if "QA" in _][0]
+            return fn_image, fn_QA
 
-    # for the old version of ee raise an exception
-    if int(ee.__version__[-3:]) <= 201:
-        raise Exception(
-            "CoastSat2.0 and above is not compatible with earthengine-api version below 0.1.201."
-            + "Try downloading a previous CoastSat version (1.x)."
-        )
-    # for the newer versions of ee
-    else:
-        # crop and download
-        download_id = ee.data.getDownloadId(
-            {
-                "image": image,
-                "region": polygon,
-                "bands": bands,
-                "filePerBand": True,
-                "name": "image",
-            }
-        )
-        response = requests.get(
-            ee.data.makeDownloadUrl(download_id),
-            timeout=(30, 30),  # 30 seconds to connect, 30 seconds to read
-        )
-        fp_zip = os.path.join(filepath, "temp.zip")
-        with open(fp_zip, "wb") as fd:
-            fd.write(response.content)
-        # unzip the individual bands
-        with zipfile.ZipFile(fp_zip) as local_zipfile:
-            for fn in local_zipfile.namelist():
-                local_zipfile.extract(fn, filepath)
-            fn_all = [os.path.join(filepath, _) for _ in local_zipfile.namelist()]
-        os.remove(fp_zip)
-        # now process the individual bands:
-        # - for Landsat
-        if satname in ["L5", "L7", "L8", "L9"]:
-            # if there is only one band, it's the panchromatic
-            if len(fn_all) == 1:
-                # return the filename of the .tif
-                return fn_all[0]
-            # otherwise there are multiple multispectral bands so we have to merge them into one .tif
-            else:
-                # select all ms bands except the QA band (which is processed separately)
-                fn_tifs = [_ for _ in fn_all if not "QA" in _]
-                filename = "ms_bands.tif"
-                # build a VRT and merge the bands (works the same with pan band)
-                outds = gdal.BuildVRT(
-                    os.path.join(filepath, "temp.vrt"), fn_tifs, separate=True
-                )
-                outds = gdal.Translate(os.path.join(filepath, filename), outds)
-                # remove temporary files
-                os.remove(os.path.join(filepath, "temp.vrt"))
-                for _ in fn_tifs:
-                    os.remove(_)
-                if os.path.exists(os.path.join(filepath, filename + ".aux.xml")):
-                    os.remove(os.path.join(filepath, filename + ".aux.xml"))
-                # return file names (ms and QA bands separately)
-                fn_image = os.path.join(filepath, filename)
-                fn_QA = [_ for _ in fn_all if "QA" in _][0]
-                return fn_image, fn_QA
-        # - for Sentinel-2
-        if satname in ["S2"]:
-            # if there is only one band, it's either the SWIR1 or QA60
-            if len(fn_all) == 1:
-                # return the filename of the .tif
-                return fn_all[0]
-            # otherwise there are multiple multispectral bands so we have to merge them into one .tif
-            else:
-                # select all ms bands except the QA band (which is processed separately)
-                fn_tifs = fn_all
-                filename = "ms_bands.tif"
-                # build a VRT and merge the bands (works the same with pan band)
-                outds = gdal.BuildVRT(
-                    os.path.join(filepath, "temp.vrt"), fn_tifs, separate=True
-                )
-                outds = gdal.Translate(os.path.join(filepath, filename), outds)
-                # remove temporary files
-                os.remove(os.path.join(filepath, "temp.vrt"))
-                for _ in fn_tifs:
-                    os.remove(_)
-                if os.path.exists(os.path.join(filepath, filename + ".aux.xml")):
-                    os.remove(os.path.join(filepath, filename + ".aux.xml"))
-                # return filename of the merge .tif file
-                fn_image = os.path.join(filepath, filename)
-                return fn_image
+    # - for Sentinel-2
+    if satname in ["S2"]:
+        # if there is only one band, it's either the SWIR1 or QA60
+        if len(fn_all) == 1:
+            # return the filename of the .tif
+            return fn_all[0]
+        # otherwise there are multiple multispectral bands so we have to merge them into one .tif
+        else:
+            # select all ms bands except the QA band (which is processed separately)
+            fn_tifs = fn_all
+            filename = "ms_bands.tif"
+            # build a VRT and merge the bands (works the same with pan band)
+            outds = gdal.BuildVRT(
+                os.path.join(filepath, "temp.vrt"), fn_tifs, separate=True
+            )
+            outds = gdal.Translate(os.path.join(filepath, filename), outds)
+            # remove temporary files
+            os.remove(os.path.join(filepath, "temp.vrt"))
+            for _ in fn_tifs:
+                os.remove(_)
+            if os.path.exists(os.path.join(filepath, filename + ".aux.xml")):
+                os.remove(os.path.join(filepath, filename + ".aux.xml"))
+            # return filename of the merge .tif file
+            fn_image = os.path.join(filepath, filename)
+            return fn_image
 
 
 def warp_image_to_target(
