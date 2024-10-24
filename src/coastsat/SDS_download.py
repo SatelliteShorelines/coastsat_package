@@ -52,7 +52,7 @@ from coastsat.SDS_preprocess import preprocess_single
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 gdal.PushErrorHandler("CPLQuietErrorHandler")
 
-
+# added from coastsat on 10/24/2024 modified by Sharon to make this function compatible with coastseg
 def authenticate_and_initialize():
     """
     Authenticates and initializes the Earth Engine API.
