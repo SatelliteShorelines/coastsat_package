@@ -46,6 +46,60 @@ def arr_to_LineString(arr):
     return LineString(arr)
 
 
+def get_model_locations():
+    try:
+        import importlib.resources
+
+        filepath_models = os.path.abspath(importlib.resources.files(models))
+    except AttributeError:
+        from importlib_resources import files
+
+        filepath_models = os.path.abspath(files(models))
+
+    return filepath_models
+
+def load_model(satname:str, settings:dict):
+    """
+    Loads the appropriate model based on the satellite name and settings.
+    
+    Parameters:
+    - satname (str): The satellite name (e.g., "L5", "L7", "L8", "L9", "S2").
+    - settings (dict): A dictionary containing settings, particularly the "sand_color".
+
+    Returns:
+    - clf: The loaded classifier model.
+    - pixel_size (int): The pixel size associated with the satellite.
+    """
+    # get the locations to load the models from
+    filepath_models = get_model_locations()
+
+    str_new = "_new" if not sklearn.__version__[:4] == "0.20" else ""
+    clf = None
+    
+    if satname in ["L5", "L7", "L8", "L9"]:
+        pixel_size = 15
+        model_filename = None
+        
+        if settings["sand_color"] == "dark":
+            model_filename = f"NN_4classes_Landsat_dark{str_new}.pkl"
+        elif settings["sand_color"] == "bright":
+            model_filename = f"NN_4classes_Landsat_bright{str_new}.pkl"
+        elif settings["sand_color"] == "default":
+            model_filename = f"NN_4classes_Landsat{str_new}.pkl"
+        elif settings["sand_color"] == "latest":
+            model_filename = f"NN_4classes_Landsat_latest{str_new}.pkl"
+        
+        if model_filename:
+            clf = joblib.load(os.path.join(filepath_models, model_filename))
+            
+    elif satname == "S2":
+        pixel_size = 10
+        clf = joblib.load(os.path.join(filepath_models, f"NN_4classes_S2{str_new}.pkl"))
+    
+    return clf, pixel_size
+
+
+
 def convert_gdf_to_array(gdf: gpd.GeoDataFrame) -> list:
     """
     Convert a GeoDataFrame to a list of NumPy arrays.

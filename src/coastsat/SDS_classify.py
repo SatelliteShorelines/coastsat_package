@@ -110,7 +110,7 @@ def label_images(metadata, settings):
     """
 
     filepath_train = settings["filepath_train"]
-    collection = settings["inputs"]["landsat_collection"]
+    collection = 'C02'
 
     # initialize figure
     fig, ax = plt.subplots(
@@ -642,7 +642,7 @@ def evaluate_classifier(classifier, metadata, settings):
     Saves .jpg images with the output of the classification in the folder ./detection
 
     """
-    collection = settings["inputs"]["landsat_collection"]
+    collection = 'C02'
     # create folder called evaluation
     fp = os.path.join(os.getcwd(), "evaluation")
     if not os.path.exists(fp):

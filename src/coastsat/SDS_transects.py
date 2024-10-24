@@ -177,7 +177,7 @@ def draw_transects(output, settings):
     # save transects.geojson
     gdf = SDS_tools.transects_to_gdf(transects)
     # set projection
-    gdf.crs = {"init": "epsg:" + str(settings["output_epsg"])}
+    gdf.crs = f"epsg:{settings['output_epsg']}"
     # save as geojson
     gdf.to_file(
         os.path.join(filepath, sitename + "_transects.geojson"),

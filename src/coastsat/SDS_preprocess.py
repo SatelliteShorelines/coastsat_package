@@ -445,7 +445,7 @@ def get_zero_pixels(im_ms: np.ndarray, shape: tuple) -> np.ndarray:
 
 # Main function to preprocess a satellite image (L5, L7, L8, L9 or S2)
 def preprocess_single(
-    fn, satname, cloud_mask_issue, pan_off, collection, do_cloud_mask=True, s2cloudless_prob=60
+    fn, satname, cloud_mask_issue, pan_off, collection='C02', do_cloud_mask=True, s2cloudless_prob=60
 ):
     """
     Reads the image and outputs the pansharpened/down-sampled multispectral bands,
@@ -493,6 +493,7 @@ def preprocess_single(
         2D array with True where no data values (-inf) are located
 
     """
+
 
     if isinstance(fn, list):
         fn_to_split = fn[0]
@@ -1521,9 +1522,9 @@ def get_reference_sl(metadata, settings):
             # concatenate all GeoDataFrames in the list into a single GeoDataFrame
             gdf_all = pd.concat(gdf_list, ignore_index=True)
 
-            gdf_all.crs = {"init": "epsg:" + str(image_epsg)}
+            gdf_all.crs = f"EPSG:{image_epsg}"
             # convert from image_epsg to user-defined coordinate system
-            gdf_all = gdf_all.to_crs({"init": "epsg:" + str(settings["output_epsg"])})
+            gdf_all = gdf_all.to_crs(f"EPSG:{settings['output_epsg']}")
             # save as geojson
             gdf_all.to_file(
                 os.path.join(filepath, sitename + "_reference_shoreline.geojson"),
