@@ -1277,7 +1277,6 @@ def get_reference_sl(metadata, settings):
     
     filepath = SDS_tools.get_filepath(settings["inputs"], satname)
     filenames = metadata[satname]["filenames"]
-    print(f"filenames: {filenames}")
     # create figure
     fig, ax = plt.subplots(1, 1, figsize=[18, 9], tight_layout=True)
     mng = plt.get_current_fig_manager()
