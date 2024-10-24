@@ -1815,7 +1815,7 @@ def download_tif(
     )
     response = requests.get(
         ee.data.makeDownloadUrl(download_id),
-        timeout=(120, 120),  # 120 seconds to connect, 120 seconds to read
+        timeout=(30, 30),  # 30 seconds to connect, 30 seconds to read
     )
     fp_zip = os.path.join(filepath, "temp.zip")
     with open(fp_zip, "wb") as fd:
