@@ -44,7 +44,7 @@ dates = ['2023-12-01', '2024-01-31']
 # satellite missions
 # sat_list = ['L5','L7','L8']
 sat_list = ['L9','L8']
-collection = 'C02' # choose Landsat collection 'C01' or 'C02'
+collection = 'C02' # 'C01' has been deprecated. Only use 'C02' for Landsat 8 and 9
 # name of the site
 sitename = 'NARRA'
 
@@ -125,7 +125,7 @@ geomtype = 'points' # choose 'points' or 'lines' for the layer geometry
 gdf = SDS_tools.output_to_gdf(output, geomtype)
 if gdf is None:
     raise Exception("output does not contain any mapped shorelines")
-gdf.crs = {'init':'epsg:'+str(settings['output_epsg'])} # set layer projection
+gdf.crs = f"EPSG:{settings['output_epsg']}" # set layer projection
 # save GEOJSON layer to file
 gdf.to_file(os.path.join(inputs['filepath'], inputs['sitename'], '%s_output_%s.geojson'%(sitename,geomtype)),
                                 driver='GeoJSON', encoding='utf-8')
