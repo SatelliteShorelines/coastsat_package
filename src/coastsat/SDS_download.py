@@ -2021,8 +2021,7 @@ def filter_S2_collection(im_list):
 
     return im_list_flt
 
-
-def merge_overlapping_images(metadata, inputs):
+def merge_overlapping_images(metadata,inputs):
     """
     Merge simultaneous overlapping images that cover the area of interest.
     When the area of interest is located at the boundary between 2 images, there
@@ -2069,22 +2068,20 @@ def merge_overlapping_images(metadata, inputs):
     """
 
     # only for Sentinel-2 at this stage (not sure if this is needed for Landsat images)
-    sat = "S2"
-    filepath = os.path.join(inputs["filepath"], inputs["sitename"])
-    filenames = metadata[sat]["filenames"]
+    sat = 'S2'
+    filepath = os.path.join(inputs['filepath'], inputs['sitename'])
+    filenames = metadata[sat]['filenames']
     total_images = len(filenames)
-
     # nested function
     def duplicates_dict(lst):
         "return duplicates and indices"
-
         def duplicates(lst, item):
-            return [i for i, x in enumerate(lst) if x == item]
+                return [i for i, x in enumerate(lst) if x == item]
 
-        return dict((x, duplicates(lst, x)) for x in set(lst) if lst.count(x) > 1)
+        return dict((x, duplicates(lst, x)) for x in set(lst) if lst.count(x) > 1)    
 
     # first pass on images that have the exact same timestamp
-    duplicates = duplicates_dict([_.split("_")[0] for _ in filenames])
+    duplicates = duplicates_dict([_.split('_')[0] for _ in filenames])
     # {"S2-2029-2020": [0,1,2,3]}
     # {"duplicate_filename": [indices of duplicated files]"}
 
@@ -2097,57 +2094,31 @@ def merge_overlapping_images(metadata, inputs):
             fn_im, polygons, im_epsg = [], [], []
             for index in range(len(idx_dup)):
                 # image names
-                fn_im.append(
-                    [
-                        os.path.join(filepath, "S2", "10m", filenames[idx_dup[index]]),
-                        os.path.join(
-                            filepath,
-                            "S2",
-                            "20m",
-                            filenames[idx_dup[index]].replace("10m", "20m"),
-                        ),
-                        os.path.join(
-                            filepath,
-                            "S2",
-                            "60m",
-                            filenames[idx_dup[index]].replace("10m", "60m"),
-                        ),
-                        os.path.join(
-                            filepath,
-                            "S2",
-                            "meta",
-                            filenames[idx_dup[index]]
-                            .replace("_10m", "")
-                            .replace(".tif", ".txt"),
-                        ),
-                    ]
-                )
-                try:
+                fn_im.append([os.path.join(filepath, 'S2', '10m', filenames[idx_dup[index]]),
+                      os.path.join(filepath, 'S2', '20m',  filenames[idx_dup[index]].replace('10m','20m')),
+                      os.path.join(filepath, 'S2', '60m',  filenames[idx_dup[index]].replace('10m','60m')),
+                      os.path.join(filepath, 'S2', 'meta', filenames[idx_dup[index]].replace('_10m','').replace('.tif','.txt'))])
+                try: 
                     # bounding polygons
                     polygons.append(SDS_tools.get_image_bounds(fn_im[index][0]))
-                    im_epsg.append(metadata[sat]["epsg"][idx_dup[index]])
+                    im_epsg.append(metadata[sat]['epsg'][idx_dup[index]])
                 except AttributeError:
-                    print(
-                        "\n Error getting the TIF. Skipping this iteration of the loop"
-                    )
+                    print("\n Error getting the TIF. Skipping this iteration of the loop")    
                     continue
                 except FileNotFoundError:
-                    print(f"\n The file {fn_im[index][0]} did not exist")
+                    print(f"\n The file {fn_im[index][0]} did not exist")    
                     continue
-
             # check if epsg are the same, print a warning message
             if len(np.unique(im_epsg)) > 1:
-                print(
-                    "WARNING: there was an error as two S2 images do not have the same epsg,"
-                    + " please open an issue on Github at https://github.com/kvos/CoastSat/issues"
-                    + " and include your script so I can find out what happened."
-                )
+                print('WARNING: there was an error as two S2 images do not have the same epsg,'+
+                      ' please open an issue on Github at https://github.com/kvos/CoastSat/issues'+
+                      ' and include your script so I can find out what happened.')
             # find which images contain other images
             contain_bools_list = []
-            for i, poly1 in enumerate(polygons):
+            for i,poly1 in enumerate(polygons):
                 contain_bools = []
-                for k, poly2 in enumerate(polygons):
-                    if k == i:
+                for k,poly2 in enumerate(polygons):
+                    if k == i: 
                         contain_bools.append(True)
                         # print('%d*: '%k+str(poly1.contains(poly2)))
                     else:
@@ -2162,21 +2133,21 @@ def merge_overlapping_images(metadata, inputs):
                 for i in [_ for _ in range(len(idx_dup)) if not _ == idx_keep]:
                     # print('removed %s'%(fn_im[i][-1]))
                     # remove the 3 .tif files + the .txt file
-                    for k in range(4):
+                    for k in range(4):  
                         os.chmod(fn_im[i][k], 0o777)
                         os.remove(fn_im[i][k])
                     total_removed_step1 += 1
         # load metadata again and update filenames
-        metadata = get_metadata(inputs)
-        filenames = metadata[sat]["filenames"]
-
+        metadata = get_metadata(inputs) 
+        filenames = metadata[sat]['filenames']
+    
     # find the pairs of images that are within 5 minutes of each other and merge them
-    time_delta = 5 * 60  # 5 minutes in seconds
-    dates = metadata[sat]["dates"].copy()
+    time_delta = 5*60 # 5 minutes in seconds
+    dates = metadata[sat]['dates'].copy()
     pairs = []
-    for i, date in enumerate(metadata[sat]["dates"]):
+    for i,date in enumerate(metadata[sat]['dates']):
         # dummy value so it does not match it again
-        dates[i] = pytz.utc.localize(datetime(1, 1, 1) + timedelta(days=i + 1))
+        dates[i] = pytz.utc.localize(datetime(1,1,1) + timedelta(days=i+1))
         # calculate time difference
         time_diff = np.array([np.abs((date - _).total_seconds()) for _ in dates])
         # find the matching times and add to pairs list
@@ -2185,14 +2156,14 @@ def merge_overlapping_images(metadata, inputs):
             continue
         else:
             idx_dup = np.where(boolvec)[0][0]
-            pairs.append([i, idx_dup])
-    total_merged_step2 = len(pairs)
+            pairs.append([i,idx_dup])
+    total_merged_step2 = len(pairs)        
     # because they could be triplicates in S2 images, adjust the pairs for consecutive merges
-    for i in range(1, len(pairs)):
-        if pairs[i - 1][1] == pairs[i][0]:
-            pairs[i][0] = pairs[i - 1][0]
-
-    # check also for quadruplicates and remove them
+    for i in range(1,len(pairs)):
+        if pairs[i-1][1] == pairs[i][0]:
+            pairs[i][0] = pairs[i-1][0]
+            
+    # check also for quadruplicates and remove them 
     pair_first = [_[0] for _ in pairs]
     idx_remove_pair = []
     for idx in np.unique(pair_first):
@@ -2200,93 +2171,59 @@ def merge_overlapping_images(metadata, inputs):
         n_duplicates = sum(pair_first == idx)
         # if more than 3 duplicates, delete the other images so that a max of 3 duplicates are handled
         if n_duplicates > 2:
-            for i in range(2, n_duplicates):
+            for i in range(2,n_duplicates):
                 # remove the last image: 3 .tif files + the .txt file
                 idx_last = [pairs[_] for _ in np.where(pair_first == idx)[0]][i][-1]
-                fn_im = [
-                    os.path.join(filepath, "S2", "10m", filenames[idx_last]),
-                    os.path.join(
-                        filepath, "S2", "20m", filenames[idx_last].replace("10m", "20m")
-                    ),
-                    os.path.join(
-                        filepath, "S2", "60m", filenames[idx_last].replace("10m", "60m")
-                    ),
-                    os.path.join(
-                        filepath,
-                        "S2",
-                        "meta",
-                        filenames[idx_last].replace("_10m", "").replace(".tif", ".txt"),
-                    ),
-                ]
-                for k in range(4):
+                fn_im = [os.path.join(filepath, 'S2', '10m', filenames[idx_last]),
+                        os.path.join(filepath, 'S2', '20m',  filenames[idx_last].replace('10m','20m')),
+                        os.path.join(filepath, 'S2', '60m',  filenames[idx_last].replace('10m','60m')),
+                        os.path.join(filepath, 'S2', 'meta', filenames[idx_last].replace('_10m','').replace('.tif','.txt'))]
+                for k in range(4):  
                     os.chmod(fn_im[k], 0o777)
-                    os.remove(fn_im[k])
+                    os.remove(fn_im[k]) 
                 # store the index of the pair to remove it outside the loop
                 idx_remove_pair.append(np.where(pair_first == idx)[0][i])
     # remove quadruplicates from list of pairs
     pairs = [i for j, i in enumerate(pairs) if j not in idx_remove_pair]
-
+    
     # for each pair of image, first check if one image completely contains the other
     # in that case keep the larger image. Otherwise merge the two images.
-    for i, pair in enumerate(pairs):
+    for i,pair in enumerate(pairs):
         # get filenames of all the files corresponding to the each image in the pair
         fn_im = []
         for index in range(len(pair)):
-            fn_im.append(
-                [
-                    os.path.join(filepath, "S2", "10m", filenames[pair[index]]),
-                    os.path.join(
-                        filepath,
-                        "S2",
-                        "20m",
-                        filenames[pair[index]].replace("10m", "20m"),
-                    ),
-                    os.path.join(
-                        filepath,
-                        "S2",
-                        "60m",
-                        filenames[pair[index]].replace("10m", "60m"),
-                    ),
-                    os.path.join(
-                        filepath,
-                        "S2",
-                        "meta",
-                        filenames[pair[index]]
-                        .replace("_10m", "")
-                        .replace(".tif", ".txt"),
-                    ),
-                ]
-            )
+            fn_im.append([os.path.join(filepath, 'S2', '10m', filenames[pair[index]]),
+                  os.path.join(filepath, 'S2', '20m',  filenames[pair[index]].replace('10m','20m')),
+                  os.path.join(filepath, 'S2', '60m',  filenames[pair[index]].replace('10m','60m')),
+                  os.path.join(filepath, 'S2', 'meta', filenames[pair[index]].replace('_10m','').replace('.tif','.txt'))])
         # get polygon for first image
-        try:
+        try: 
             polygon0 = SDS_tools.get_image_bounds(fn_im[0][0])
-            im_epsg0 = metadata[sat]["epsg"][pair[0]]
+            im_epsg0 = metadata[sat]['epsg'][pair[0]]
         except AttributeError:
-            print("\n Error getting the TIF. Skipping this iteration of the loop")
+            print("\n Error getting the TIF. Skipping this iteration of the loop")    
             continue
         except FileNotFoundError:
-            print(f"\n The file {fn_im[index][0]} did not exist")
+            print(f"\n The file {fn_im[index][0]} did not exist")    
             continue
         # get polygon for second image
-        try:
+        try: 
             polygon1 = SDS_tools.get_image_bounds(fn_im[1][0])
-            im_epsg1 = metadata[sat]["epsg"][pair[1]]
+            im_epsg1 = metadata[sat]['epsg'][pair[1]] 
         except AttributeError:
-            print("\n Error getting the TIF. Skipping this iteration of the loop")
+            print("\n Error getting the TIF. Skipping this iteration of the loop")    
             continue
         except FileNotFoundError:
-            print(f"\n The file {fn_im[index][0]} did not exist")
-            continue
+                print(f"\n The file {fn_im[index][0]} did not exist")    
+                continue  
         # check if epsg are the same
         if not im_epsg0 == im_epsg1:
-            print(
-                "WARNING: there was an error as two S2 images do not have the same epsg,"
-                + " please open an issue on Github at https://github.com/kvos/CoastSat/issues"
-                + " and include your script so we can find out what happened."
-            )
+            print('WARNING: there was an error as two S2 images do not have the same epsg,'+
+                  ' please open an issue on Github at https://github.com/kvos/CoastSat/issues'+
+                  ' and include your script so we can find out what happened.')
             break
         # check if one image contains the other one
-        if polygon0.contains(polygon1):
+        if polygon0.contains(polygon1):  
             # if polygon0 contains polygon1, remove files for polygon1
             for k in range(4):  # remove the 3 .tif files + the .txt file
                 os.chmod(fn_im[1][k], 0o777)
@@ -2295,66 +2232,46 @@ def merge_overlapping_images(metadata, inputs):
             continue
         elif polygon1.contains(polygon0):
             # if polygon1 contains polygon0, remove image0
-            for k in range(4):  # remove the 3 .tif files + the .txt file
+            for k in range(4):   # remove the 3 .tif files + the .txt file
                 os.chmod(fn_im[0][k], 0o777)
                 os.remove(fn_im[0][k])
             # print('removed 0')
             # adjust the order in case of triplicates
-            if i + 1 < len(pairs):
-                if pairs[i + 1][0] == pair[0]:
-                    pairs[i + 1][0] = pairs[i][1]
+            if i+1 < len(pairs):
+                if pairs[i+1][0] == pair[0]: pairs[i+1][0] = pairs[i][1]
             continue
         # otherwise merge the two images after masking the nodata values
         else:
             for index in range(len(pair)):
                 # read image
-                (
-                    im_ms,
-                    georef,
-                    cloud_mask,
-                    im_extra,
-                    im_QA,
-                    im_nodata,
-                ) = SDS_preprocess.preprocess_single(fn_im[index], sat, False, "C02")
+                im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = SDS_preprocess.preprocess_single(fn_im[index], sat, False, 'C02')
                 # in Sentinel2 images close to the edge of the image there are some artefacts,
                 # that are squares with constant pixel intensities. They need to be masked in the
                 # raster (GEOTIFF). It can be done using the image standard deviation, which
                 # indicates values close to 0 for the artefacts.
                 if len(im_ms) > 0:
                     # calculate image std for the first 10m band
-                    im_std = SDS_tools.image_std(im_ms[:, :, 0], 1)
+                    im_std = SDS_tools.image_std(im_ms[:,:,0],1)
                     # convert to binary
                     im_binary = np.logical_or(im_std < 1e-6, np.isnan(im_std))
                     # dilate to fill the edges (which have high std)
                     mask10 = morphology.dilation(im_binary, morphology.square(3))
                     # mask the 10m .tif file (add no_data where mask is True)
-                    SDS_tools.mask_raster(fn_im[index][0], mask10)
-                    # for the newer versions just resample the mask for the 10m bands
-                    else:
-                        # create mask for the 20m band (SWIR1) by resampling the 10m one
-                        mask20 = ndimage.zoom(mask10, zoom=1 / 2, order=0)
-                        mask20 = transform.resize(
-                            mask20,
-                            im_extra.shape,
-                            mode="constant",
-                            order=0,
-                            preserve_range=True,
-                        )
-                        mask20 = mask20.astype(bool)
+                    SDS_tools.mask_raster(fn_im[index][0], mask10)    
+                    # create mask for the 20m band (SWIR1) by resampling the 10m one
+                    mask20 = ndimage.zoom(mask10,zoom=1/2,order=0)
+                    mask20 = transform.resize(mask20, im_extra.shape, mode='constant',
+                                              order=0, preserve_range=True)
+                    mask20 = mask20.astype(bool)     
                     # mask the 20m .tif file (im_extra)
                     SDS_tools.mask_raster(fn_im[index][1], mask20)
                     # create a mask for the 60m QA band by resampling the 20m one
-                    mask60 = ndimage.zoom(mask20, zoom=1 / 3, order=0)
-                    mask60 = transform.resize(
-                        mask60,
-                        im_QA.shape,
-                        mode="constant",
-                        order=0,
-                        preserve_range=True,
-                    )
+                    mask60 = ndimage.zoom(mask20,zoom=1/3,order=0)
+                    mask60 = transform.resize(mask60, im_QA.shape, mode='constant',
+                                              order=0, preserve_range=True)
                     mask60 = mask60.astype(bool)
                     # mask the 60m .tif file (im_QA)
-                    SDS_tools.mask_raster(fn_im[index][2], mask60)
+                    SDS_tools.mask_raster(fn_im[index][2], mask60)   
                     # make a figure for quality control/debugging
                     # im_RGB = SDS_preprocess.rescale_image_intensity(im_ms[:,:,[2,1,0]], cloud_mask, 99.9)
                     # fig,ax= plt.subplots(2,3,tight_layout=True)
@@ -2369,67 +2286,57 @@ def merge_overlapping_images(metadata, inputs):
                     # ax[0,2].imshow(im_QA)
                     # ax[0,2].set_title('Im QA')
                     # ax[1,2].imshow(im_nodata)
-                    # ax[1,2].set_title('Im nodata')
+                    # ax[1,2].set_title('Im nodata') 
                 else:
                     continue
-
+    
             # once all the pairs of .tif files have been masked with no_data, merge the using gdal_merge
-            fn_merged = os.path.join(filepath, "merged.tif")
-            for k in range(3):
+            fn_merged = os.path.join(filepath, 'merged.tif')
+            for k in range(3):  
                 # merge masked bands
-                gdal_merge.main(
-                    ["", "-o", fn_merged, "-n", "0", fn_im[0][k], fn_im[1][k]]
-                )
+                gdal_merge.main(['', '-o', fn_merged, '-n', '0', fn_im[0][k], fn_im[1][k]])
                 # remove old files
                 os.chmod(fn_im[0][k], 0o777)
                 os.remove(fn_im[0][k])
                 os.chmod(fn_im[1][k], 0o777)
                 os.remove(fn_im[1][k])
                 # rename new file
-                fn_new = fn_im[0][k].split(".")[0] + "_merged.tif"
+                fn_new = fn_im[0][k].split('.')[0] + '_merged.tif'
                 os.chmod(fn_merged, 0o777)
                 os.rename(fn_merged, fn_new)
-
+    
             # open both metadata files
             metadict0 = dict([])
-            with open(fn_im[0][3], "r") as f:
-                metadict0["filename"] = f.readline().split("\t")[1].replace("\n", "")
-                metadict0["acc_georef"] = float(
-                    f.readline().split("\t")[1].replace("\n", "")
-                )
-                metadict0["epsg"] = int(f.readline().split("\t")[1].replace("\n", ""))
+            with open(fn_im[0][3], 'r') as f:
+                metadict0['filename'] = f.readline().split('\t')[1].replace('\n','')
+                metadict0['acc_georef'] = float(f.readline().split('\t')[1].replace('\n',''))
+                metadict0['epsg'] = int(f.readline().split('\t')[1].replace('\n',''))
             metadict1 = dict([])
-            with open(fn_im[1][3], "r") as f:
-                metadict1["filename"] = f.readline().split("\t")[1].replace("\n", "")
-                metadict1["acc_georef"] = float(
-                    f.readline().split("\t")[1].replace("\n", "")
-                )
-                metadict1["epsg"] = int(f.readline().split("\t")[1].replace("\n", ""))
+            with open(fn_im[1][3], 'r') as f:
+                metadict1['filename'] = f.readline().split('\t')[1].replace('\n','')
+                metadict1['acc_georef'] = float(f.readline().split('\t')[1].replace('\n',''))
+                metadict1['epsg'] = int(f.readline().split('\t')[1].replace('\n',''))
             # check if both images have the same georef accuracy
-            if np.any(
-                np.array([metadict0["acc_georef"], metadict1["acc_georef"]]) == -1
-            ):
-                metadict0["georef"] = -1
+            if np.any(np.array([metadict0['acc_georef'],metadict1['acc_georef']]) == -1):
+                metadict0['georef'] = -1
             # add new name
-            metadict0["filename"] = metadict0["filename"].split(".")[0] + "_merged.tif"
+            metadict0['filename'] =  metadict0['filename'].split('.')[0] + '_merged.tif'
             # remove the old metadata.txt files
             os.chmod(fn_im[0][3], 0o777)
             os.remove(fn_im[0][3])
             os.chmod(fn_im[1][3], 0o777)
-            os.remove(fn_im[1][3])
+            os.remove(fn_im[1][3])        
             # rewrite the .txt file with a new metadata file
-            fn_new = fn_im[0][3].split(".")[0] + "_merged.txt"
-            with open(fn_new, "w") as f:
+            fn_new = fn_im[0][3].split('.')[0] + '_merged.txt'
+            with open(fn_new, 'w') as f:
                 for key in metadict0.keys():
-                    f.write("%s\t%s\n" % (key, metadict0[key]))
-
+                    f.write('%s\t%s\n'%(key,metadict0[key]))  
+                    
             # update filenames list (in case there are triplicates)
-            filenames[pair[0]] = metadict0["filename"]
-
-    print(
-        "%d out of %d Sentinel-2 images were merged (overlapping or duplicate)"
-        % (total_removed_step1 + total_merged_step2, total_images)
-    )
+            filenames[pair[0]] = metadict0['filename']
+     
+    print('%d out of %d Sentinel-2 images were merged (overlapping or duplicate)'%(total_removed_step1+total_merged_step2,
+                                                                                   total_images))
 
     # update the metadata dict
     metadata_updated = get_metadata(inputs)
