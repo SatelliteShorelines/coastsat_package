@@ -2329,13 +2329,6 @@ def merge_overlapping_images(metadata, inputs):
                     mask10 = morphology.dilation(im_binary, morphology.square(3))
                     # mask the 10m .tif file (add no_data where mask is True)
                     SDS_tools.mask_raster(fn_im[index][0], mask10)
-                    # now calculate the mask for the 20m band (SWIR1)
-                    # for the older version of the ee api calculate the image std again
-                    if int(ee.__version__[-3:]) <= 201:
-                        # calculate std to create another mask for the 20m band (SWIR1)
-                        im_std = SDS_tools.image_std(im_extra, 1)
-                        im_binary = np.logical_or(im_std < 1e-6, np.isnan(im_std))
-                        mask20 = morphology.dilation(im_binary, morphology.square(3))
                     # for the newer versions just resample the mask for the 10m bands
                     else:
                         # create mask for the 20m band (SWIR1) by resampling the 10m one
