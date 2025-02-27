@@ -2,7 +2,8 @@
 # Shoreline extraction from satellite images
 #==========================================================#
 
-# Kilian Vos WRL 2018
+# Originally developed by Kilian Vos WRL 2018
+# Modified by Sharon Batiste 2023-2025
 
 #%% 1. Initial settings
 
@@ -61,6 +62,11 @@ inputs = {
     'landsat_collection': collection
         }
 
+# Enter the Google project ID that has access to Google Earth Engine API enabled
+# A guide on how to set up earth engine for first time : https://satelliteshorelines.github.io/CoastSeg/google-earth-engine-setup/
+# A guide on how to check if your project has access to the API: https://satelliteshorelines.github.io/CoastSeg/google-earth-enable-api/
+project = ''
+SDS_download.authenticate_and_initialize(project)
 # before downloading the images, check how many images are available for your inputs
 SDS_download.check_images_available(inputs);
 
