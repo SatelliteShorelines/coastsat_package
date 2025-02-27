@@ -20,6 +20,7 @@ from datetime import timezone
 
 # earth engine module
 import ee
+import google.auth
 
 # modules to download, unzip and stack the images
 import requests
@@ -52,36 +53,68 @@ from coastsat.SDS_preprocess import preprocess_single
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 gdal.PushErrorHandler("CPLQuietErrorHandler")
 
-# added from coastsat on 10/24/2024 modified by Sharon to make this function compatible with coastseg
-def authenticate_and_initialize():
+def authenticate_and_initialize(project=""):
     """
     Authenticates and initializes the Earth Engine API.
     This function handles the authentication and initialization process:
         1. Try to use existing token to initialize
         2. If 1 fails, try to refresh the token using Application Default Credentials
         3. If 2 fails, authenticate manually via the web browser
+    args:
+        project (str): The Google Cloud project ID to use for Earth Engine.
+    Raises:
+        Exception: If the project ID is not provided or if authentication fails.
+    Returns:
+        None
     """
+    if project == "":
+        raise Exception("Please provide a Google project ID that has access to GEE.")
     # first try to initialize connection with GEE server with existing token
     try: 
-        ee.Initialize()
-        print('GEE initialized (existing token).')
+        initialize_gee(project=project)
     except:
-        # if token is expired, try to refresh it
-        # based on https://stackoverflow.com/questions/53472429/how-to-get-a-gcp-bearer-token-programmatically-with-python
+        print('Google Earth Engine is not initialized. Attempting to authenticate and initialize with Google Earth Engine API')
+        # get the user to authenticate manually and initialize the sesion
+        ee.Authenticate()
+        ee.Initialize(project=project)
+        print('GEE initialized (manual authentication).')
+
+
+# added from coastsat on 10/24/2024 modified by Sharon to make this function compatible with coastseg
+def initialize_gee(project=""):
+    """
+    Initializes the Earth Engine API.
+    This function handles the initialization process:
+        1. Try to use existing token to initialize
+        2. If 1 fails, try to refresh the token using Application Default Credentials
+    args:
+        project (str): The Google Cloud project ID to use for Earth Engine.
+    Raises:
+        Exception: If the project ID is not provided or if authentication fails.
+    Returns:
+        None
+    """
+    if project == "":
+        raise Exception("Please provide a Google project ID that has access to GEE.")
+    # first try to initialize connection with GEE server with existing token
+    try: 
+        print(f"Google Earth Engine(GEE) is not initialized. Attempting to initialize for project ID '{project}'")
+        ee.Initialize(project=project)
+        print('GEE initialized with existing token.')
+    except:
+        # if token is expired, try to refresh it using the existing credentials
         try:
-            import google.auth
-            import google.auth.transport.requests
-            creds, project = google.auth.default()
-            # creds.valid is False, and creds.token is None
-            # refresh credentials to populate those
+            print('Google Earth Engine is not initialized. Attempting to initialize with Google Earth Engine API with existing credentials')
+            creds = ee.data.get_persistent_credentials()
             auth_req = google.auth.transport.requests.Request()
             creds.refresh(auth_req)
             # initialise GEE session with refreshed credentials
-            ee.Initialize(creds)
+            ee.Initialize(creds, project=project)
             print('GEE initialized (refreshed token).')
         except:
-            print(f"Please authenticate with Google Earth Engine first.")
-            raise Exception("Please authenticate with Google Earth Engine first.")
+            print(f"Unable to initialize Google Earth Engine connection. Please authenticate with Google Earth Engine.")
+            raise Exception("Unable to initialize Google Earth Engine connection. Please authenticate with Google Earth Engine.")
+
 def release_logger(logger):
     """
     Release the logger and its associated file handlers.
@@ -352,21 +385,20 @@ def check_dates_order(dates):
     if dates[1] <= dates[0]:
         raise Exception("Verify that your dates are in the correct chronological order")
 
-def initialize_ee():
+def check_if_ee_initialized():
     """
-    Initializes the Earth Engine Python API.
-
-    This function attempts to initialize the Earth Engine Python API by creating an
-    `ee.ImageCollection` object. If the initialization fails, it means that the API
-    has already been initialized, and the function does nothing.
+    Checks if the Earth Engine API is initialized.
 
     Returns:
-        None
+        bool: True if the Earth Engine API is initialized, False otherwise.
     """
     try:
         ee.ImageCollection("LANDSAT/LT05/C02/T1_TOA")
-    except:
-        ee.Initialize()
+        return True
+    except Exception as e:
+        print(f"Earth Engine API is not initialized: {e} Run authenticate_and_initialize(project=<project_id>) to initialize access to Google Earth Engine.")
+        return False
+
 
 def validate_collection(inputs: dict):
     """
@@ -650,13 +682,15 @@ def merge_image_tiers(inputs, im_dict_T1, im_dict_T2):
     return im_dict_T1
 
 
-def check_images_available(inputs, months_list=None, scene_cloud_cover=0.95,tier1=True,tier2=False):
+def check_images_available(inputs, months_list=None, scene_cloud_cover=0.95,tier1=True,tier2=False,project="",initialize_ee=True):
     """
     Scan the GEE collections to see how many images are available for each
     satellite mission (L5,L7,L8,L9,S2), collection (C02) and tier (T1,T2).
     
     Note: Landsat Collection 1 (C01) is deprecated. Users should migrate to Collection 2 (C02).
     For more information, visit: https://developers.google.com/earth-engine/landsat_c1_to_c2
+
+    Before running this function, make sure to run authenticate_and_initialize(project=<project_id>). Otherwise, the function will raise an error.
 
     KV WRL 2018
 
@@ -689,9 +723,10 @@ def check_images_available(inputs, months_list=None, scene_cloud_cover=0.95,tier
     im_dict_T1 = {}
     
     check_dates_order(dates)
-    initialize_ee()
-    # check_collection(inputs["landsat_collection"])
-
+    
+    if check_if_ee_initialized() == False:
+        raise Exception("Earth Engine API is not initialized. Please initialize it first with ee.Initialize(project=<project_id>)")
+    
     print("Number of images available between %s and %s:" % (dates_str[0], dates_str[1]), end="\n")
 
     if tier1:
@@ -788,10 +823,8 @@ def retrieve_images(
     # Initialize the logger
     logger = setup_logger(im_folder)
 
-    # initialise connection with GEE server
-    # ee.Initialize()
-    # initialise connection with GEE server
-    authenticate_and_initialize()
+    if check_if_ee_initialized() == False:
+        raise Exception("Earth Engine API is not initialized. Please initialize it first with ee.Initialize(project=<project_id>)")
     
     # validates the inputs have references the correct collection (C02)
     inputs = validate_collection(inputs)
