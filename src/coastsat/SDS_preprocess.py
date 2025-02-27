@@ -442,6 +442,15 @@ def get_zero_pixels(im_ms: np.ndarray, shape: tuple) -> np.ndarray:
         im_zeros = np.logical_and(np.isin(im_ms[:, :, k], 0), im_zeros)
     return im_zeros
 
+def raise_exception_if_file_is_empty(filepath: str,msg=""):
+    """
+    Raises an exception if the file is empty.
+
+    Args:
+        filepath (str): The path to the file to check.
+    """
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"\nFile '{filepath}' does not exist.{msg}")
 
 # Main function to preprocess a satellite image (L5, L7, L8, L9 or S2)
 def preprocess_single(
@@ -514,6 +523,8 @@ def preprocess_single(
         # filepaths to .tif files
         fn_ms = fn[0]
         fn_mask = fn[1]
+        raise_exception_if_file_is_empty(fn_ms)
+        raise_exception_if_file_is_empty(fn_mask)
         # read ms bands
         data = gdal.Open(fn_ms, gdal.GA_ReadOnly)
         georef = np.array(data.GetGeoTransform())
@@ -554,6 +565,9 @@ def preprocess_single(
         fn_ms = fn[0]
         fn_pan = fn[1]
         fn_mask = fn[2]
+        raise_exception_if_file_is_empty(fn_ms)
+        raise_exception_if_file_is_empty(fn_mask)
+        raise_exception_if_file_is_empty(fn_pan)
         # read ms bands
         data = gdal.Open(fn_ms, gdal.GA_ReadOnly)
         georef = np.array(data.GetGeoTransform())
@@ -633,6 +647,12 @@ def preprocess_single(
     if satname == "S2":
         # read 10m bands (R,G,B,NIR)
         fn_ms = fn[0]
+        # read 20m band (SWIR1) from the first band
+        fn_swir = fn[1]
+        fn_mask = fn[2]
+        raise_exception_if_file_is_empty(fn_ms)
+        raise_exception_if_file_is_empty(fn_mask)
+        raise_exception_if_file_is_empty(fn_swir)
         data = gdal.Open(fn_ms, gdal.GA_ReadOnly)
         georef = np.array(data.GetGeoTransform())
         bands = read_bands(fn_ms, satname)
@@ -652,8 +672,7 @@ def preprocess_single(
             cloud_mask = np.ones((nrows, ncols)).astype("bool")
             return im_ms, georef, cloud_mask, [], [], []
 
-        # read 20m band (SWIR1) from the first band
-        fn_swir = fn[1]
+
         im_swir = read_bands(fn_swir)[0] / 10000  # TOA scaled to 10000
         im_swir = np.expand_dims(im_swir, axis=2)
 

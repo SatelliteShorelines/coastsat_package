@@ -571,22 +571,28 @@ def extract_shorelines(
             shoreline_date = os.path.basename(fn[0])[:19]
 
             # preprocess image (cloud mask + pansharpening/downsampling)
-            (
-                im_ms,
-                georef,
-                cloud_mask,
-                im_extra,
-                im_QA,
-                im_nodata,
-            ) = SDS_preprocess.preprocess_single(
-                fn,
-                satname,
-                settings["cloud_mask_issue"],
-                settings["pan_off"],
-                collection,
-                apply_cloud_mask,
-                settings.get("s2cloudless_prob",60),
-            )
+            try:
+                (
+                    im_ms,
+                    georef,
+                    cloud_mask,
+                    im_extra,
+                    im_QA,
+                    im_nodata,
+                ) = SDS_preprocess.preprocess_single(
+                    fn,
+                    satname,
+                    settings["cloud_mask_issue"],
+                    settings["pan_off"],
+                    collection,
+                    apply_cloud_mask,
+                    settings.get("s2cloudless_prob",60),
+                )
+            except FileNotFoundError as e:
+                logger.error(f"Could not extract shoreline for {shoreline_date} due to missing files.{e}")
+                print(
+                    f"\nCould not extract shoreline for {shoreline_date} due to missing files.{e}"
+                )
             # get image spatial reference system (epsg code) from metadata dict
             image_epsg = metadata[satname]["epsg"][i]
 
