@@ -21,8 +21,8 @@ import skimage.transform as transform
 import skimage.morphology as morphology
 import sklearn.decomposition as decomposition
 import skimage.exposure as exposure
-from skimage.io import imsave
 from skimage import img_as_ubyte
+import imageio
 
 # other modules
 from osgeo import gdal
@@ -1047,11 +1047,11 @@ def create_jpg(
         # location to save image ex. rgb image would be in sitename/RGB/sitename.jpg
         fname = os.path.join(ext_filepath, date + "_" + ext + "_" + satname + ".jpg")
         if ext == "RGB":
-            imsave(fname, im_RGB, quality=100)
+            imageio.imwrite(fname, im_RGB, quality=100)
         if ext == "SWIR":
-            imsave(fname, im_SWIR, quality=100)
+            imageio.imwrite(fname, im_SWIR, quality=100)
         if ext == "NIR":
-            imsave(fname, im_NIR, quality=100)
+            imageio.imwrite(fname, im_NIR, quality=100)
 
 
 def save_single_jpg(
