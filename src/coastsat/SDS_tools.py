@@ -374,7 +374,7 @@ def get_image_dimensions(image_path):
 ###################################################################################################
 
 
-def create_folder_structure(im_folder, satname):
+def create_folder_structure(im_folder, satname,polars:Optional[str] = None):
     """
     Create the structure of subfolders for each satellite mission
 
@@ -407,10 +407,16 @@ def create_folder_structure(im_folder, satname):
         filepaths.append(os.path.join(im_folder, satname, "ms"))
         filepaths.append(os.path.join(im_folder, satname, "swir"))
         filepaths.append(os.path.join(im_folder, satname, "mask"))
+    elif satname in ['S1']:
+        if not polars:
+            polars = ['VH']
+        if isinstance(polars, str):
+            polars = [polars]
+        for polar in polars:
+            filepaths.append(os.path.join(im_folder, satname, polar))
     # create the subfolders if they don't exist already
     for fp in filepaths:
-        if not os.path.exists(fp):
-            os.makedirs(fp)
+        os.makedirs(fp, exist_ok=True)
 
     return filepaths
 
@@ -477,6 +483,7 @@ def get_filepath(inputs, satname):
         fp_swir = os.path.join(filepath_data, sitename, satname, "swir")
         fp_mask = os.path.join(filepath_data, sitename, satname, "mask")
         filepath = [fp_ms, fp_swir, fp_mask]
+    
 
     return filepath
 

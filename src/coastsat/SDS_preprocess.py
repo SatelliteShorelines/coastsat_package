@@ -1124,6 +1124,31 @@ def save_single_jpg(
         im_ms, cloud_mask, date, satname, jpg_directory, im_nodata=im_nodata, **kwargs
     )
 
+def save_sar_jpg(tif,filepath):
+    """
+    Saves a SAR (Synthetic Aperture Radar) image from a GeoTIFF file as a JPEG file.
+    This function reads a SAR image from the specified GeoTIFF file, rescales its intensity values 
+    to the range [0, 1] using a predefined input range of [-45, 5], converts the rescaled image to 
+    an 8-bit unsigned integer format, and saves it as a JPEG file.
+    Args:
+        tif (str): The file path to the input GeoTIFF file containing the SAR image.
+        filepath (str): The file path where the output JPEG image will be saved.
+    Returns:
+        None
+    Notes:
+        - The input intensity range [-45, 5] is based on the original CoastSeg article.
+        - The output JPEG image is saved with maximum quality (quality=100).
+    """
+    data_S1 = gdal.Open(tif)
+    bands_sar = [data_S1.GetRasterBand(k + 1).ReadAsArray() for k in range(data_S1.RasterCount)]
+    im_S1 = bands_sar[0]
+
+    # Rescale intensities to the [0, 1] range. Use the range -45 to 5 for the input image based on original coastseg artic
+    im_S1_rescaled = exposure.rescale_intensity(im_S1, in_range=(-45, 5), out_range=(0, 1))
+    # Convert the rescaled image to uint8, so we can save it as a jpg
+    im_S1_uint8 = img_as_ubyte(im_S1_rescaled)
+
+    imageio.imwrite(filepath, im_S1_uint8, quality=100)
 
 def save_jpg(metadata, settings, **kwargs):
     """
@@ -1175,6 +1200,15 @@ def save_jpg(metadata, settings, **kwargs):
         print("%s: %d images" % (satname, len(filenames)))
         # loop through images
         for i in range(len(filenames)):
+            # S1 has a different format than the other images
+            if satname == "S1":
+                # Save SAR image as jpg
+                tif = filenames[i]
+                date_S1 = tif.split('_')[0]
+                polar = tif.split('_')[-1].split('.')[0]
+                sar_jpg_path = os.path.join(filepath_jpg, date_S1 + '_' + polar + '_' + satname + '.jpg')
+                save_sar_jpg(filenames[i],sar_jpg_path)
+                continue
             print("\r%d%%" % int((i + 1) / len(filenames) * 100), end="")
             # image filename
             fn = SDS_tools.get_filenames(filenames[i], filepath, satname)
