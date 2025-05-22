@@ -11,7 +11,6 @@ import os
 import json
 import numpy as np
 import matplotlib.pyplot as plt
-import pdb
 import pandas as pd
 from datetime import date, datetime
 from json import JSONEncoder
@@ -32,7 +31,7 @@ import geopandas as gpd
 from shapely import geometry
 import re
 from shapely.geometry import Polygon
-import logging
+from typing import List, Dict, Any, Tuple, Union
 
 # CoastSat modules
 from coastsat import SDS_tools
@@ -41,17 +40,126 @@ from coastsat import SDS_tools
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
 
-def filter_images_by_cloud_cover_nodata(fn, satname, cloud_mask_issue, max_cloud_no_data_cover=None, max_cloud_cover=None, do_cloud_mask=True, s2cloudless_prob=60):
+def preprocess_image(
+    fn: Union[str, List[str]], satname: str, settings: Dict[str, Any], collection: str
+) -> Tuple[np.ndarray, Any, np.ndarray, np.ndarray]:
+    """
+    Preprocesses satellite imagery depending on the satellite type and returns the processed outputs.
+
+    Parameters:
+    ----------
+    fn : Union[str, List[str]]
+        Filename or list of filenames of the satellite image(s). For Sentinel-1 (SAR), a list of one file is expected.
+    satname : str
+        Name of the satellite, e.g., "S1" for Sentinel-1 or "S2" for Sentinel-2.
+    settings : Dict[str, Any]
+        Dictionary containing preprocessing configuration. Expected keys include:
+            - "apply_cloud_mask" (bool, optional): Whether to apply cloud masking (default is True).
+            - "cloud_mask_issue" (Any): Issue-specific configuration for cloud masking.
+            - "pan_off" (Any): Panchromatic settings.
+            - "s2cloudless_prob" (int, optional): Threshold probability for s2cloudless cloud masking (default is 60).
+    collection : str
+        Satellite data collection name (used by optical processing).
+
+    Returns:
+    -------
+    Tuple[np.ndarray, Any, np.ndarray, np.ndarray]
+        - im_ms: Multispectral image array.
+        - georef: Georeferencing metadata (varies by satellite).
+        - cloud_mask: Boolean array indicating cloud presence (True = cloud).
+        - im_nodata: Boolean array indicating no-data pixels (True = no data).
+    """
+    apply_cloud_mask = settings.get("apply_cloud_mask", True)
+
+    if satname == "S1":
+        im_ms, georef = SDS_tools.read_sar_image(fn[0])
+        im_nodata = np.zeros(im_ms.shape[:2], dtype=bool)
+        cloud_mask = np.zeros(im_ms.shape[:2], dtype=bool)
+        return im_ms, georef, cloud_mask, im_nodata
+    else:
+        im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = preprocess_single(
+            fn,
+            satname,
+            settings["cloud_mask_issue"],
+            settings["pan_off"],
+            collection,
+            apply_cloud_mask,
+            settings.get("s2cloudless_prob", 60),
+        )
+        return im_ms, georef, cloud_mask, im_nodata
+
+
+def calculate_cloud_cover_combined(cloud_mask: np.ndarray) -> float:
+    """
+    Calculates the fraction of the image covered by clouds,
+    including no-data pixels.
+    """
+    if cloud_mask is None or cloud_mask.size == 0:
+        return 0.0
+
+    # If both masks are all False, return 0.0
+    if not cloud_mask.any():
+        return 0.0
+
+    total_pixels = cloud_mask.size
+    return np.sum(cloud_mask.astype(int)) / total_pixels
+
+
+def calculate_cloud_cover_excluding_nodata(
+    cloud_mask: np.ndarray, nodata_mask: np.ndarray
+) -> float:
+    """
+    Calculates cloud cover excluding no-data pixels.
+
+    Args:
+        cloud_mask: Boolean array where True indicates cloud pixels.
+        nodata_mask: Boolean array where True indicates no-data pixels.
+
+    Returns:
+        Cloud cover as a float between 0 and 1.
+    """
+    # Handle empty or None inputs
+    if (
+        cloud_mask is None
+        or nodata_mask is None
+        or cloud_mask.size == 0
+        or nodata_mask.size == 0
+    ):
+        return 0.0
+
+    # If both masks are all False, return 0.0
+    if not cloud_mask.any() and not nodata_mask.any():
+        return 0.0
+
+    valid_pixels = ~nodata_mask
+    valid_pixel_count = np.sum(valid_pixels)
+
+    if valid_pixel_count == 0:
+        return 1.0  # fallback: treat as fully cloudy if no valid pixels
+
+    clean_cloud_mask = np.logical_and(cloud_mask, valid_pixels)
+    return np.sum(clean_cloud_mask.astype(np.float32)) / valid_pixel_count
+
+
+def filter_images_by_cloud_cover_nodata(
+    fn,
+    satname,
+    cloud_mask_issue,
+    max_cloud_no_data_cover=None,
+    max_cloud_cover=None,
+    do_cloud_mask=True,
+    s2cloudless_prob=60,
+):
     """
     Filters images based on cloud cover and no data pixels.
 
     Args:
         fn (list[str]): A list of file paths.
-            The first file path is the full path to mulitspectral image (ms) 
+            The first file path is the full path to mulitspectral image (ms)
             The second path is the swir/panchromatic image (swir/pan) depending on the satellite.
                 - For S2 the second path is the swir image (swir)
                 - For Landsat the second path is the panchromatic image (pan) except for Landsat 5 where it is the cloud mask image (mask)
-            The third path is the cloud mask image (mask) 
+            The third path is the cloud mask image (mask)
                 - except on Landsat 5 where it is the second path
         satname (str): Name of the satellite.
         cloud_mask_issue (bool): True if there is an issue with the cloud mask and sand pixels are being masked on the images
@@ -73,38 +181,50 @@ def filter_images_by_cloud_cover_nodata(fn, satname, cloud_mask_issue, max_cloud
         im_extra,
         im_QA,
         im_nodata,
-    ) = preprocess_single(fn, satname, cloud_mask_issue, False, 'C02', do_cloud_mask, s2cloudless_prob)
-    
+    ) = preprocess_single(
+        fn, satname, cloud_mask_issue, False, "C02", do_cloud_mask, s2cloudless_prob
+    )
+
     # check if the cloud and no data mask exceed the threshold
     cloud_cover_combined = np.sum(cloud_mask) / cloud_mask.size
     # if no max cloud and no data cover is provided then check the cloud cover
     if max_cloud_no_data_cover is not None:
-        were_images_filtered=remove_files_above_threshold(fn, cloud_cover_combined, max_cloud_no_data_cover, msg="due to cloud and no data cover")
+        were_images_filtered = remove_files_above_threshold(
+            fn,
+            cloud_cover_combined,
+            max_cloud_no_data_cover,
+            msg="due to cloud and no data cover",
+        )
         # return True if the image was filtered otherwise continue to check the cloud cover
         if were_images_filtered:
             return True
-        
+
     if max_cloud_cover is not None:
         cloud_mask_alone = np.logical_xor(cloud_mask, im_nodata)
         # compute updated cloud cover percentage (without no data pixels)
         valid_pixels = np.sum(~im_nodata)
         cloud_cover = np.sum(cloud_mask_alone.astype(int)) / valid_pixels.astype(int)
-        return remove_files_above_threshold(fn, cloud_cover, max_cloud_cover, msg="due to cloud cover")
-    
+        return remove_files_above_threshold(
+            fn, cloud_cover, max_cloud_cover, msg="due to cloud cover"
+        )
+
     # if nothing was filtered then return False
     return False
 
-def remove_files_above_threshold(filepaths: list[str], prc: float, threshold: int, msg:str="due to cloud cover"):
+
+def remove_files_above_threshold(
+    filepaths: list[str], prc: float, threshold: int, msg: str = "due to cloud cover"
+):
     """
     Removes files that exceed the cloud cover threshold.
 
     Args:
         filepaths (list[str]): A list of file paths.
-            The first file path is the full path to mulitspectral image (ms) 
+            The first file path is the full path to mulitspectral image (ms)
             The second path is the swir/panchromatic image (swir/pan) depending on the satellite.
                 - For S2 the second path is the swir image (swir)
                 - For Landsat the second path is the panchromatic image (pan) except for Landsat 5 where it is the cloud mask image (mask)
-            The third path is the cloud mask image (mask) 
+            The third path is the cloud mask image (mask)
                 - except on Landsat 5 where it is the second path
         prc (float): The percentage of cloud cover.
         threshold (float): The threshold value for cloud cover.
@@ -115,14 +235,19 @@ def remove_files_above_threshold(filepaths: list[str], prc: float, threshold: in
         bool: True if files were removed, False otherwise.
     """
     if prc > threshold:
-        print(f"skipping image '{os.path.basename(filepaths[0])}' {msg} {prc*100:.2f}% exceeds threshold of {threshold*100:.2f}%")
+        print(
+            f"skipping image '{os.path.basename(filepaths[0])}' {msg} {prc*100:.2f}% exceeds threshold of {threshold*100:.2f}%"
+        )
         # delete files that exceed the cloud cover threshold
         for file in filepaths:
             os.remove(file)
         return True
     return False
 
-def create_gdf_from_image_extent(height:int, width:int, georef:np.array, image_epsg:int, output_epsg:int)->gpd.GeoDataFrame:
+
+def create_gdf_from_image_extent(
+    height: int, width: int, georef: np.array, image_epsg: int, output_epsg: int
+) -> gpd.GeoDataFrame:
     """
     Create a GeoDataFrame containing a polygon from the extent of an image.
 
@@ -154,6 +279,7 @@ def create_gdf_from_image_extent(height:int, width:int, georef:np.array, image_e
     )
     return gdf
 
+
 def convert_coords_to_gdf(coords: np.ndarray, epsg: int) -> gpd.GeoDataFrame:
     """
     Converts pixel coordinates to a GeoDataFrame with the same coordinates in the reference system.
@@ -178,7 +304,10 @@ def convert_coords_to_gdf(coords: np.ndarray, epsg: int) -> gpd.GeoDataFrame:
 
     return gdf
 
-def bind_image_size(array: np.ndarray, im_shape: tuple, input_epsg: int, georef: list, output_epsg: int):
+
+def bind_image_size(
+    array: np.ndarray, im_shape: tuple, input_epsg: int, georef: list, output_epsg: int
+):
     """
     Binds the image size to the reference shoreline coordinates, adjusting coordinates outside the image
     to the nearest edge within the image boundaries.
@@ -203,7 +332,9 @@ def bind_image_size(array: np.ndarray, im_shape: tuple, input_epsg: int, georef:
     return pixel_coords
 
 
-def transform_world_coords_to_pixel_coords(array: np.ndarray, input_epsg: int, georef: np.array, output_epsg: int)->np.array:
+def transform_world_coords_to_pixel_coords(
+    array: np.ndarray, input_epsg: int, georef: np.array, output_epsg: int
+) -> np.array:
     """
     Transforms world coordinates to pixel coordinates.
 
@@ -325,7 +456,7 @@ def to_file(data: dict, filepath: str) -> None:
         json.dump(data, fp, cls=DateTimeEncoder)
 
 
-def read_bands(filename: str, satname: str = "") -> list:
+def read_bands(filename: str, satname: str = "") -> list[np.ndarray]:
     """
     Read all the raster bands of a geospatial image file using GDAL.
 
@@ -442,7 +573,8 @@ def get_zero_pixels(im_ms: np.ndarray, shape: tuple) -> np.ndarray:
         im_zeros = np.logical_and(np.isin(im_ms[:, :, k], 0), im_zeros)
     return im_zeros
 
-def raise_exception_if_file_is_empty(filepath: str,msg=""):
+
+def raise_exception_if_file_is_empty(filepath: str, msg=""):
     """
     Raises an exception if the file is empty.
 
@@ -452,9 +584,16 @@ def raise_exception_if_file_is_empty(filepath: str,msg=""):
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"\nFile '{filepath}' does not exist.{msg}")
 
+
 # Main function to preprocess a satellite image (L5, L7, L8, L9 or S2)
 def preprocess_single(
-    fn, satname, cloud_mask_issue, pan_off, collection='C02', do_cloud_mask=True, s2cloudless_prob=60
+    fn,
+    satname,
+    cloud_mask_issue,
+    pan_off,
+    collection="C02",
+    do_cloud_mask=True,
+    s2cloudless_prob=60,
 ):
     """
     Reads the image and outputs the pansharpened/down-sampled multispectral bands,
@@ -502,7 +641,6 @@ def preprocess_single(
         2D array with True where no data values (-inf) are located
 
     """
-
 
     if isinstance(fn, list):
         fn_to_split = fn[0]
@@ -672,7 +810,6 @@ def preprocess_single(
             cloud_mask = np.ones((nrows, ncols)).astype("bool")
             return im_ms, georef, cloud_mask, [], [], []
 
-
         im_swir = read_bands(fn_swir)[0] / 10000  # TOA scaled to 10000
         im_swir = np.expand_dims(im_swir, axis=2)
 
@@ -683,11 +820,15 @@ def preprocess_single(
         fn_mask = fn[2]
         im_QA = read_bands(fn_mask)[0]
         if not do_cloud_mask:
-            cloud_mask_QA60 = create_cloud_mask(im_QA, satname, cloud_mask_issue, collection)
+            cloud_mask_QA60 = create_cloud_mask(
+                im_QA, satname, cloud_mask_issue, collection
+            )
             # compute cloud mask using s2cloudless probability band
-            cloud_mask_s2cloudless = create_s2cloudless_mask(cloud_prob, s2cloudless_prob)
+            cloud_mask_s2cloudless = create_s2cloudless_mask(
+                cloud_prob, s2cloudless_prob
+            )
             # combine both cloud masks
-            cloud_mask = np.logical_or(cloud_mask_QA60,cloud_mask_s2cloudless)
+            cloud_mask = np.logical_or(cloud_mask_QA60, cloud_mask_s2cloudless)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
             im_nodata = pad_edges(im_swir, im_nodata)
@@ -709,9 +850,11 @@ def preprocess_single(
                 im_QA, satname, cloud_mask_issue, collection
             )
             # compute cloud mask using s2cloudless probability band
-            cloud_mask_s2cloudless = create_s2cloudless_mask(cloud_prob, s2cloudless_prob)
+            cloud_mask_s2cloudless = create_s2cloudless_mask(
+                cloud_prob, s2cloudless_prob
+            )
             # combine both cloud masks
-            cloud_mask = np.logical_or(cloud_mask_QA60,cloud_mask_s2cloudless)
+            cloud_mask = np.logical_or(cloud_mask_QA60, cloud_mask_s2cloudless)
             # add pixels with -inf or nan values on any band to the nodata mask
             im_nodata = get_nodata_mask(im_ms, cloud_mask.shape)
             im_nodata = pad_edges(im_swir, im_nodata)
@@ -801,10 +944,14 @@ def create_cloud_mask(im_QA, satname, cloud_mask_issue, collection):
     if cloud_mask_issue:
         cloud_mask = np.zeros_like(im_QA, dtype=bool)
         for value in cloud_values:
-            cloud_mask_temp = np.isin(im_QA, value)         
-            elem = morphology.square(6) # use a square of width 6 pixels
-            cloud_mask_temp = morphology.binary_opening(cloud_mask_temp, elem) # perform image opening            
-            cloud_mask_temp = morphology.remove_small_objects(cloud_mask_temp, min_size=100, connectivity=1)
+            cloud_mask_temp = np.isin(im_QA, value)
+            elem = morphology.square(6)  # use a square of width 6 pixels
+            cloud_mask_temp = morphology.binary_opening(
+                cloud_mask_temp, elem
+            )  # perform image opening
+            cloud_mask_temp = morphology.remove_small_objects(
+                cloud_mask_temp, min_size=100, connectivity=1
+            )
             cloud_mask = np.logical_or(cloud_mask, cloud_mask_temp)
 
     return cloud_mask
@@ -996,6 +1143,93 @@ def rescale_image_intensity(im, cloud_mask, prob_high):
     return im_adj
 
 
+def save_sar_image(
+    im_ms: np.ndarray,
+    date: str,
+    satname: str,
+    root_dir: str,
+    quality: int = 100,
+) -> None:
+    """
+    Saves a single-band SAR image (e.g., Sentinel-1) as a JPEG file.
+
+    The image is assumed to be stored in the first band of a 3D array (im_ms[:, :, 0]).
+    Intensity values are rescaled from the SAR-specific range of [-45, 5] dB to [0, 1],
+    then saved as an 8-bit JPEG in the RGB output folder.
+
+    Args:
+        im_ms (np.ndarray): 3D array where the SAR image is in the first band.
+        date (str): Acquisition date string used in the filename.
+        satname (str): Name of the satellite (e.g., 'S1').
+        root_dir (str): Base directory where the image will be saved.
+        quality (int, optional): JPEG quality level (default is 100).
+
+    Returns:
+        None
+    """
+    if im_ms.ndim == 2:
+        im = im_ms  # already 2D
+    elif im_ms.ndim == 3:
+        im = im_ms[:, :, 0]  # first band
+    else:
+        raise ValueError(f"Unexpected shape for SAR input: {im_ms.shape}")
+    im_rescaled = exposure.rescale_intensity(im, in_range=(-45, 5), out_range=(0, 1))
+    im_uint8 = img_as_ubyte(im_rescaled)
+
+    rgb_dir = os.path.join(root_dir, "RGB")
+    print(f"Saving SAR image to {rgb_dir}")
+    os.makedirs(rgb_dir, exist_ok=True)
+
+    filename = f"{date}_RGB_{satname}.jpg"
+    imageio.imwrite(os.path.join(rgb_dir, filename), im_uint8, quality=quality)
+
+
+def save_multispectral_images(
+    im_ms: np.ndarray,
+    cloud_mask: np.ndarray,
+    date: str,
+    satname: str,
+    root_dir: str,
+    quality: int = 100,
+) -> None:
+    """
+    Saves RGB, NIR, and SWIR1 bands from a multispectral image as JPEG files to the
+    folders RGB/, NIR/, and SWIR/ under the root directory.
+
+    Each band is extracted from a 3D image array, rescaled using percentile-based
+    stretching (ignoring cloud-covered areas), converted to 8-bit, and saved in
+    separate folders (RGB/, NIR/, SWIR/) under the root directory.
+
+    Args:
+        im_ms (np.ndarray): 3D array of multispectral bands ordered as [B, G, R, NIR, SWIR1].
+        cloud_mask (np.ndarray): 2D boolean array where True indicates clouds.
+        date (str): Acquisition date string used in the filename.
+        satname (str): Name of the satellite (e.g., 'L5', 'S2').
+        root_dir (str): Base directory where the images will be saved.
+        quality (int, optional): JPEG quality level (default is 100).
+
+    Returns:
+        None
+    """
+    band_map = {
+        "RGB": im_ms[:, :, [2, 1, 0]],
+        "NIR": im_ms[:, :, 3],
+        "SWIR": im_ms[:, :, 4],
+    }
+
+    for band_name, band_data in band_map.items():
+        rescaled = rescale_image_intensity(band_data, cloud_mask, 99.9)
+        rescaled_uint8 = img_as_ubyte(rescaled)
+
+        band_dir = os.path.join(root_dir, band_name)
+        os.makedirs(band_dir, exist_ok=True)
+
+        filename = f"{date}_{band_name}_{satname}.jpg"
+        imageio.imwrite(
+            os.path.join(band_dir, filename), rescaled_uint8, quality=quality
+        )
+
+
 def create_jpg(
     im_ms: np.array,
     cloud_mask: np.array,
@@ -1005,11 +1239,10 @@ def create_jpg(
     **kwargs,
 ) -> None:
     """
-    Saves a .jpg file with the RGB image as well as the NIR and SWIR1 grayscale images.
-    This functions can be modified to obtain different visualisations of the
-    multispectral images.
+    Saves JPEG images for RGB, NIR, and SWIR bands from a multispectral image.
+    For SAR images, it saves a single-band to the RGB folder.
 
-    KV WRL 2018
+    Originally created by KV WRL 2018 and modified in 2025
 
     Arguments:
     -----------
@@ -1021,37 +1254,24 @@ def create_jpg(
         string containing the date at which the image was acquired
     satname: str
         name of the satellite mission (e.g., 'L5')
+        Available options are 'L5', 'L7', 'L8', 'S2', 'S1'
     filepath: str
-        directory in which to save the images
+        directory in which to save the images. Generally this is 'data/preprocessed'
+    Kwargs:
+        Currently not used but can be used to pass additional arguments
 
     Returns:
     -----------
         Saves a .jpg image corresponding to the preprocessed satellite image
 
     """
-    # rescale image intensity for display purposes
-    im_RGB = rescale_image_intensity(im_ms[:, :, [2, 1, 0]], cloud_mask, 99.9)
-    im_NIR = rescale_image_intensity(im_ms[:, :, 3], cloud_mask, 99.9)
-    im_SWIR = rescale_image_intensity(im_ms[:, :, 4], cloud_mask, 99.9)
-    # convert images to bytes so they can be saved
-    im_RGB = img_as_ubyte(im_RGB)
-    im_NIR = img_as_ubyte(im_NIR)
-    im_SWIR = img_as_ubyte(im_SWIR)
-    # Save each kind of image with skimage.io
-    file_types = ["RGB", "SWIR", "NIR"]
-    # create folders RGB, SWIR, and NIR to hold each type of image
-    for ext in file_types:
-        ext_filepath = filepath + os.sep + ext
-        if not os.path.exists(ext_filepath):
-            os.mkdir(ext_filepath)
-        # location to save image ex. rgb image would be in sitename/RGB/sitename.jpg
-        fname = os.path.join(ext_filepath, date + "_" + ext + "_" + satname + ".jpg")
-        if ext == "RGB":
-            imageio.imwrite(fname, im_RGB, quality=100)
-        if ext == "SWIR":
-            imageio.imwrite(fname, im_SWIR, quality=100)
-        if ext == "NIR":
-            imageio.imwrite(fname, im_NIR, quality=100)
+    if not os.path.isdir(filepath):
+        os.makedirs(filepath, exist_ok=True)
+
+    if satname == "S1":
+        save_sar_image(im_ms, date, satname, filepath)
+    else:
+        save_multispectral_images(im_ms, cloud_mask, date, satname, filepath)
 
 
 def save_single_jpg(
@@ -1086,49 +1306,48 @@ def save_single_jpg(
     NIR saved under data/preprocessed/NIR
     SWIR saved under data/preprocessed/SWIR
     """
-    if "apply_cloud_mask" in kwargs:
-        do_cloud_mask = kwargs["apply_cloud_mask"]
-    else:
-        do_cloud_mask = True
-    # create subfolder to store the jpg files
+    do_cloud_mask = kwargs.get("apply_cloud_mask", True)
+
+    # Set up output directory
     jpg_directory = os.path.join(filepath_data, sitename, "jpg_files", "preprocessed")
     os.makedirs(jpg_directory, exist_ok=True)
+
     # get locations to each tif file for ms, pan, mask, swir (if applicable for satname)
     fn = SDS_tools.get_filenames(filename, tif_paths, satname)
     # preprocess the image and perform pansharpening
-    im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = preprocess_single(
-        fn, satname, cloud_mask_issue, False, collection, do_cloud_mask
+    settings = {
+        "apply_cloud_mask": do_cloud_mask,
+        "cloud_mask_issue": cloud_mask_issue,
+        "pan_off": False,
+        "s2cloudless_prob": kwargs.get("s2cloudless_prob", 60),
+    }
+    im_ms, georef, cloud_mask, im_nodata = preprocess_image(
+        fn, satname, settings, collection
     )
-    # compute cloud_cover percentage (with no data pixels)
-    cloud_cover_combined = np.divide(
-        sum(sum(cloud_mask.astype(int))), (cloud_mask.shape[0] * cloud_mask.shape[1])
-    )
-    if cloud_cover_combined > 0.99:  # if 99% of cloudy pixels in image skip
-        return
-    # remove no data pixels from the cloud mask (for example L7 bands of no data should not be accounted for)
-    cloud_mask_adv = np.logical_xor(cloud_mask, im_nodata)
 
-    # compute updated cloud cover percentage (without no data pixels)
-    cloud_cover = np.divide(
-        sum(sum(cloud_mask_adv.astype(int))), (sum(sum((~im_nodata).astype(int))))
-    )
-    # skip image if cloud cover is above threshold
+    # remove no data pixels from the cloud mask (for example L7 bands of no data should not be accounted for)
+    # compute cloud cover percentage (without no data pixels)
+    cloud_cover = calculate_cloud_cover_excluding_nodata(cloud_mask, im_nodata)
+    # cloud_cover = np.divide(
+    #     sum(sum(cloud_mask_adv.astype(int))), (sum(sum((~im_nodata).astype(int))))
+    # )
+
     if cloud_cover > cloud_thresh or cloud_cover == 1:
-        return
+        return  # skip image if cloud cover is above threshold
+
     # save .jpg with date and satellite in the title
     date = filename[:19]
     plt.ioff()  # turning interactive plotting off
-    # get cloud mask parameter
-
     create_jpg(
         im_ms, cloud_mask, date, satname, jpg_directory, im_nodata=im_nodata, **kwargs
     )
 
-def save_sar_jpg(tif,filepath):
+
+def save_sar_jpg(tif, filepath):
     """
     Saves a SAR (Synthetic Aperture Radar) image from a GeoTIFF file as a JPEG file.
-    This function reads a SAR image from the specified GeoTIFF file, rescales its intensity values 
-    to the range [0, 1] using a predefined input range of [-45, 5], converts the rescaled image to 
+    This function reads a SAR image from the specified GeoTIFF file, rescales its intensity values
+    to the range [0, 1] using a predefined input range of [-45, 5], converts the rescaled image to
     an 8-bit unsigned integer format, and saves it as a JPEG file.
     Args:
         tif (str): The file path to the input GeoTIFF file containing the SAR image.
@@ -1140,15 +1359,20 @@ def save_sar_jpg(tif,filepath):
         - The output JPEG image is saved with maximum quality (quality=100).
     """
     data_S1 = gdal.Open(tif)
-    bands_sar = [data_S1.GetRasterBand(k + 1).ReadAsArray() for k in range(data_S1.RasterCount)]
+    bands_sar = [
+        data_S1.GetRasterBand(k + 1).ReadAsArray() for k in range(data_S1.RasterCount)
+    ]
     im_S1 = bands_sar[0]
 
     # Rescale intensities to the [0, 1] range. Use the range -45 to 5 for the input image based on original coastseg artic
-    im_S1_rescaled = exposure.rescale_intensity(im_S1, in_range=(-45, 5), out_range=(0, 1))
+    im_S1_rescaled = exposure.rescale_intensity(
+        im_S1, in_range=(-45, 5), out_range=(0, 1)
+    )
     # Convert the rescaled image to uint8, so we can save it as a jpg
     im_S1_uint8 = img_as_ubyte(im_S1_rescaled)
 
     imageio.imwrite(filepath, im_S1_uint8, quality=100)
+
 
 def save_jpg(metadata, settings, **kwargs):
     """
@@ -1182,10 +1406,9 @@ def save_jpg(metadata, settings, **kwargs):
 
     sitename = settings["inputs"]["sitename"]
     cloud_thresh = settings["cloud_thresh"]
-    s2cloudless_prob = settings.get('s2cloudless_prob',60)
+    s2cloudless_prob = settings.get("s2cloudless_prob", 60)
     filepath_data = settings["inputs"]["filepath"]
     collection = settings["inputs"]["landsat_collection"]
-    
 
     # create subfolder to store the jpg files
     filepath_jpg = os.path.join(filepath_data, sitename, "jpg_files", "preprocessed")
@@ -1204,10 +1427,12 @@ def save_jpg(metadata, settings, **kwargs):
             if satname == "S1":
                 # Save SAR image as jpg
                 tif = filenames[i]
-                date_S1 = tif.split('_')[0]
-                polar = tif.split('_')[-1].split('.')[0]
-                sar_jpg_path = os.path.join(filepath_jpg, date_S1 + '_' + polar + '_' + satname + '.jpg')
-                save_sar_jpg(filenames[i],sar_jpg_path)
+                date_S1 = tif.split("_")[0]
+                polar = tif.split("_")[-1].split(".")[0]
+                sar_jpg_path = os.path.join(
+                    filepath_jpg, date_S1 + "_" + polar + "_" + satname + ".jpg"
+                )
+                save_sar_jpg(filenames[i], sar_jpg_path)
                 continue
             print("\r%d%%" % int((i + 1) / len(filenames) * 100), end="")
             # image filename
@@ -1312,22 +1537,34 @@ def get_reference_sl(metadata, settings):
     # otherwise get the user to manually digitise a shoreline on
     # S2, L8, L9 or L5 images (no L7 because of scan line error)
     # first try to use S2 images (10m res for manually digitizing the reference shoreline)
-    if "S2" in metadata.keys() and metadata.get("S2",{'filenames':[]})["filenames"]!=[]:
+    if (
+        "S2" in metadata.keys()
+        and metadata.get("S2", {"filenames": []})["filenames"] != []
+    ):
         satname = "S2"
     # if no S2 images, use L8 or L9 (15m res in the RGB with pansharpening)
-    elif "L8" in metadata.keys() and metadata.get("L8",{'filenames':[]})["filenames"]!=[]:
+    elif (
+        "L8" in metadata.keys()
+        and metadata.get("L8", {"filenames": []})["filenames"] != []
+    ):
         satname = "L8"
-    elif "L9" in metadata.keys() and metadata.get("L9",{'filenames':[]})["filenames"]!=[]:
+    elif (
+        "L9" in metadata.keys()
+        and metadata.get("L9", {"filenames": []})["filenames"] != []
+    ):
         satname = "L9"
     # if no S2, L8 or L9 use L5 (30m res)
-    elif "L5" in metadata.keys() and metadata.get("L5",{'filenames':[]})["filenames"]!=[]:
+    elif (
+        "L5" in metadata.keys()
+        and metadata.get("L5", {"filenames": []})["filenames"] != []
+    ):
         satname = "L5"
     # if only L7 images, ask user to download other images
     else:
         raise Exception(
-            "You cannot digitize the shoreline on L7 images (because of gaps in the images), add another L8, S2 or L5 to your dataset."
+            "You cannot digitize the shoreline on L7 or S1 images (because of gaps in the images), add another L8, S2 or L5 to your dataset."
         )
-    
+
     filepath = SDS_tools.get_filepath(settings["inputs"], satname)
     filenames = metadata[satname]["filenames"]
     # create figure
@@ -1345,7 +1582,7 @@ def get_reference_sl(metadata, settings):
             settings["pan_off"],
             collection,
             apply_cloud_mask,
-            settings.get('s2cloudless_prob',60)
+            settings.get("s2cloudless_prob", 60),
         )
 
         # compute cloud_cover percentage (with no data pixels)
@@ -1363,7 +1600,9 @@ def get_reference_sl(metadata, settings):
         )
         # skip image if cloud cover is above threshold
         if cloud_cover > settings["cloud_thresh"]:
-            print(f"cloud cover {cloud_cover} is above threshold {settings['cloud_thresh']}")
+            print(
+                f"cloud cover {cloud_cover} is above threshold {settings['cloud_thresh']}"
+            )
             continue
         # rescale image intensity for display purposes
         im_RGB = rescale_image_intensity(im_ms[:, :, [2, 1, 0]], cloud_mask, 99.9)
@@ -1481,7 +1720,7 @@ def get_reference_sl(metadata, settings):
                 pts = ginput(n=50000, timeout=-1, show_clicks=True)
                 pts_pix = np.array(pts)
                 # convert pixel coordinates to world coordinates
-                pts_world = SDS_tools.convert_pix2world(pts_pix[:,[1,0]], georef)
+                pts_world = SDS_tools.convert_pix2world(pts_pix[:, [1, 0]], georef)
                 # interpolate between points clicked by the user (1m resolution)
                 pts_world_interp = np.expand_dims(np.array([np.nan, np.nan]), axis=0)
                 for k in range(len(pts_world) - 1):

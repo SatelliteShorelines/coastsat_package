@@ -1,8 +1,9 @@
 """
 This module contains utilities to work with satellite images
-    
+
 Author: Kilian Vos, Water Research Laboratory, University of New South Wales
 """
+
 # Standard library imports
 import os
 from datetime import datetime, timedelta
@@ -24,7 +25,9 @@ from shapely import geometry
 import skimage.transform as transform
 import pytz
 import pdb
-
+from skimage import io
+import scipy.ndimage
+from PIL import Image
 
 
 # np.seterr(all='ignore') # raise/ignore divisions by 0 and nans
@@ -34,7 +37,7 @@ import pdb
 ###################################################################################################
 
 
-def convert_pix2world(points:np.array, georef:np.array):
+def convert_pix2world(points: np.array, georef: np.array):
     """
     Converts pixel coordinates (pixel row and column) to world projected
     coordinates performing an affine transformation.
@@ -374,7 +377,7 @@ def get_image_dimensions(image_path):
 ###################################################################################################
 
 
-def create_folder_structure(im_folder, satname,polars:Optional[str] = None):
+def create_folder_structure(im_folder, satname, polars: Optional[str] = None):
     """
     Create the structure of subfolders for each satellite mission
 
@@ -407,9 +410,9 @@ def create_folder_structure(im_folder, satname,polars:Optional[str] = None):
         filepaths.append(os.path.join(im_folder, satname, "ms"))
         filepaths.append(os.path.join(im_folder, satname, "swir"))
         filepaths.append(os.path.join(im_folder, satname, "mask"))
-    elif satname in ['S1']:
+    elif satname in ["S1"]:
         if not polars:
-            polars = ['VH']
+            polars = ["VH"]
         if isinstance(polars, str):
             polars = [polars]
         for polar in polars:
@@ -419,6 +422,36 @@ def create_folder_structure(im_folder, satname,polars:Optional[str] = None):
         os.makedirs(fp, exist_ok=True)
 
     return filepaths
+
+
+def read_sar_image(file_path):
+    """
+    Reads a SAR image file, creates a three-channel image from the first band,
+    and returns the processed image along with its georeference transformation.
+
+    Parameters:
+        file_path (str): Path to the SAR image file.
+
+    Returns:
+        im (np.ndarray): The processed image with three channels.
+        georef (np.ndarray): The georeference transformation array.
+    """
+    # Open the file using GDAL
+    data = gdal.Open(file_path)
+    if data is None:
+        raise IOError(f"Could not open file: {file_path}")
+
+    # Read all bands as arrays
+    bands = [data.GetRasterBand(k + 1).ReadAsArray() for k in range(data.RasterCount)]
+
+    # Use the first band to create a 3-channel image
+    im_2d = bands[0]
+    im = np.repeat(im_2d[:, :, np.newaxis], 3, axis=2)
+
+    # Obtain the georeference transformation and convert to a NumPy array
+    georef = np.array(data.GetGeoTransform())
+
+    return im, georef
 
 
 def get_filepath(inputs, satname):
@@ -483,7 +516,10 @@ def get_filepath(inputs, satname):
         fp_swir = os.path.join(filepath_data, sitename, satname, "swir")
         fp_mask = os.path.join(filepath_data, sitename, satname, "mask")
         filepath = [fp_ms, fp_swir, fp_mask]
-    
+    elif satname == "S1":
+        # access downloaded Sentinel 1 images
+        fp_vh = os.path.join(filepath_data, sitename, satname, "VH")
+        filepath = [fp_vh]
 
     return filepath
 
@@ -532,6 +568,11 @@ def get_filenames(filename, filepath, satname):
             os.path.join(filepath[0], filename),
             os.path.join(filepath[1], fn_swir),
             os.path.join(filepath[2], fn_mask),
+        ]
+    if satname == "S1":
+        # S1 only has 1 band VH
+        fn = [
+            os.path.join(filepath[0], filename),
         ]
 
     return fn
@@ -802,26 +843,27 @@ def get_closest_datapoint(dates, dates_ts, values_ts):
 def polygon_from_geojson(fn):
     """
     Extracts coordinates from a .kml file.
-    
+
     KV WRL 2023
 
     Arguments:
     -----------
     fn: str
-        filepath + filename of the geojson file to be read          
-                
-    Returns:    
+        filepath + filename of the geojson file to be read
+
+    Returns:
     -----------
     polygon: list
         coordinates extracted from the .geojson file
-        
-    """    
-    
+
+    """
+
     # read .geojson file
-    gdf = gpd.read_file(fn,driver='GeoJSON')
-    coords = np.array(gdf.iloc[0]['geometry'].exterior.coords)
+    gdf = gpd.read_file(fn, driver="GeoJSON")
+    coords = np.array(gdf.iloc[0]["geometry"].exterior.coords)
     polygon = [[[_[0], _[1]] for _ in coords]]
     return polygon
+
 
 def polygon_from_kml(fn):
     """
@@ -1185,18 +1227,23 @@ def smallest_rectangle(polygon):
     polygon_rect = [[[_[0], _[1]] for _ in coords_polygon]]
     return polygon_rect
 
+
 def make_animation_mp4(filepath_images, fps, fn_out):
     "function to create an animation with the saved figures"
     import imageio
-    
-    with imageio.get_writer(fn_out, mode='I', fps=fps) as writer:
+
+    with imageio.get_writer(fn_out, mode="I", fps=fps) as writer:
         filenames = os.listdir(filepath_images)
         # order chronologically
         filenames = np.sort(filenames)
         for i in range(len(filenames)):
-            image = imageio.imread(os.path.join(filepath_images,filenames[i]))
+            image = imageio.imread(os.path.join(filepath_images, filenames[i]))
             writer.append_data(image)
-    print('Animation has been generated (using %d frames per second) and saved at %s'%(fps,fn_out))
+    print(
+        "Animation has been generated (using %d frames per second) and saved at %s"
+        % (fps, fn_out)
+    )
+
 
 def compare_timeseries(ts, gt, key, settings):
     if key not in gt.keys():
@@ -1382,8 +1429,8 @@ def ordinal(n: int):
 
     """
     if 11 <= (n % 100) <= 13:
-        suffix = 'th'
+        suffix = "th"
     else:
-        suffix = ['th','st','nd','rd','th'][min(n % 10, 4)]
+        suffix = ["th", "st", "nd", "rd", "th"][min(n % 10, 4)]
     ordnum = str(n) + suffix
     return ordnum

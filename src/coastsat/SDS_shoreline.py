@@ -1,6 +1,6 @@
 # pylint: disable=line-too-long
 """
-This module contains all the functions needed for extracting satellite-derived 
+This module contains all the functions needed for extracting satellite-derived
 shorelines (SDS)
 
 Author: Kilian Vos, Water Research Laboratory, University of New South Wales
@@ -10,8 +10,9 @@ Author: Kilian Vos, Water Research Laboratory, University of New South Wales
 import datetime
 import os
 import pdb
+import logging
 import traceback
-from typing import List, Union
+from typing import Tuple, List, Union, Dict, Any
 
 # related third party imports
 import geopandas as gpd
@@ -20,14 +21,14 @@ import matplotlib.lines as mlines
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
-import shapely
+import scipy
 import sklearn
 from matplotlib import gridspec
 from pylab import ginput
-from shapely import geometry
 from shapely.geometry import LineString
 from skimage import filters, measure, morphology
-from shapely.geometry import Polygon, LineString, Point
+from shapely.geometry import LineString, Point
+from skimage.filters import threshold_multiotsu
 from tqdm.auto import tqdm
 
 # local application/library specific imports
@@ -39,8 +40,333 @@ from coastsat.classification import models, training_data, training_sites
 # set numpy error handling
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 
+
+def filter_contours(
+    contours: List[np.ndarray],
+    georef: dict,
+    output_epsg: int,
+    image_epsg: int,
+    min_length_sl: float,
+) -> np.ndarray:
+    """
+    Filters a list of contour lines by removing those shorter than a specified minimum length,
+    and converts coordinates from pixel space to a desired spatial reference system (EPSG).
+
+    Args:
+        contours (List[np.ndarray]): List of contour arrays with pixel coordinates.
+        georef (dict): Georeferencing information for pixel-to-world coordinate transformation.
+        output_epsg (int): EPSG code of the desired output coordinate system.
+        image_epsg (int): EPSG code of the image's current coordinate system.
+        min_length_sl (float): Minimum length (in output EPSG units) for a contour to be kept.
+
+    Returns:
+        np.ndarray: A 2D array of concatenated x and y coordinates of all valid contours
+                    in the output EPSG coordinate system.
+    """
+    # convert pixel coordinates to world coordinates
+    contours_world = SDS_tools.convert_pix2world(contours, georef)
+    # convert world coordinates to desired spatial reference system
+    contours_epsg = SDS_tools.convert_epsg(contours_world, image_epsg, output_epsg)
+
+    # 1. Remove contours that have a perimeter < min_length_sl (provided in settings dict)
+    # this enables to remove the very small contours that do not correspond to the shoreline
+    contours_long = []
+    for l, wl in enumerate(contours_epsg):
+        coords = [(wl[k, 0], wl[k, 1]) for k in range(len(wl))]
+        a = LineString(coords)  # shapely LineString structure
+        if a.length >= min_length_sl:
+            contours_long.append(wl)
+    # format points into np.array
+    x_points = np.array([])
+    y_points = np.array([])
+    for k in range(len(contours_long)):
+        x_points = np.append(x_points, contours_long[k][:, 0])
+        y_points = np.append(y_points, contours_long[k][:, 1])
+    contours_array = np.transpose(np.array([x_points, y_points]))
+
+    shoreline = contours_array  # shoreline is spatially referenced in the output_epsg
+
+    return shoreline
+
+
+def should_skip_image(
+    cloud_cover_combined: float,
+    cloud_cover: float,
+    settings: Dict[str, float],
+    logger: logging.Logger,
+    satname: str,
+    date_str: str,
+) -> bool:
+    """
+    Determine whether to skip a satellite image based on cloud metrics.
+
+    Parameters:
+    ----------
+    cloud_cover_combined : float
+        Proportion of cloud + no-data pixels over the total image area.
+    cloud_cover : float
+        Proportion of cloud pixels over valid (non-no-data) pixels.
+    settings : Dict[str, float]
+        Configuration dictionary with at least the key:
+            - "cloud_thresh": float, threshold above which the image is skipped.
+    logger : logging.Logger
+        Logger object to record warnings.
+    satname : str
+        Name of the satellite (e.g., "S1", "S2").
+    date_str : str
+        Date string representing the acquisition date of the image.
+
+    Returns:
+    -------
+    bool
+        True if the image should be skipped due to excessive cloud or no-data pixels, False otherwise.
+    """
+    if cloud_cover_combined > 0.99:
+        logger.warning(
+            f"{satname} {date_str}: Skipped due to >99% cloud + no-data pixels"
+        )
+        return True
+    if cloud_cover > settings["cloud_thresh"]:
+        logger.warning(
+            f"{satname} {date_str}: Skipped due to cloud cover {cloud_cover:.2%} "
+            f"> threshold {settings['cloud_thresh']:.2%}"
+        )
+        return True
+    return False
+
+
+def otsu_threshold(im, min_beach_area):
+    # Apply Otsu's thresholding
+    threshold = threshold_multiotsu(im, classes=2)  # split into water and land
+    otsu = im > min(
+        threshold
+    )  # only a single threshold but lets pretend there could be more
+    otsu_med = morphology.remove_small_objects(
+        otsu, min_size=min_beach_area, connectivity=2
+    )
+
+    return otsu_med, threshold
+
+
+def find_shoreline_SAR(otsu_image, ref_shoreline_buffer, georef, image_epsg, settings):
+    otsu_med_masked = otsu_image.copy().astype(float)
+    otsu_med_masked[~ref_shoreline_buffer] = np.NaN
+    contours = measure.find_contours(
+        otsu_med_masked, 0.5
+    )  # returns lists of np.arrays that are row col formatted example [[[y1,x1],[y2,x2],...], [[[y1,x1],[y2,x2],...]]]
+    processed_contours = process_contours(contours)
+
+    shoreline = filter_contours(
+        processed_contours,
+        georef,
+        settings["output_epsg"],
+        image_epsg,
+        settings["min_length_sl"],
+    )
+    return shoreline
+
+
+def find_shoreline_optical(
+    im_ms,
+    im_labels,
+    im_ref_buffer,
+    cloud_mask,
+    cloud_mask_adv,
+    im_nodata,
+    georef,
+    image_epsg,
+    satname,
+    shoreline_date,
+    settings,
+    logger=None,
+):
+    """
+    Finds the shoreline using either MNDWI contours or label-based classification,
+    based on the number of sand pixels in the reference buffer.
+
+    Args:
+        im_ms (np.ndarray): Multispectral image.
+        im_labels (np.ndarray): Labeled classification image.
+        im_ref_buffer (np.ndarray): Reference buffer mask for shoreline detection.
+        cloud_mask (np.ndarray): Cloud mask (bool array).
+        cloud_mask_adv (np.ndarray): Advanced cloud mask for final shoreline filtering.
+        im_nodata (np.ndarray): Nodata mask.
+        georef: Georeferencing metadata.
+        image_epsg (int): EPSG code for image projection.
+        satname (str): Satellite name for logging.
+        shoreline_date (str): Date of shoreline image (for logging).
+        settings (dict): Configuration settings.
+        logger (logging.Logger, optional): Logger instance for logging messages.
+
+    Returns:
+        shoreline (list or array): Extracted shoreline geometry.
+        t_mndwi (float): Threshold value used for MNDWI if applicable.
+    """
+    if logger is None:
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+    # Check sand pixels in reference buffer
+    if sum(im_labels[im_ref_buffer, 0]) < 50:
+        im_mndwi = SDS_tools.nd_index(im_ms[:, :, 4], im_ms[:, :, 1], cloud_mask)
+        logger.info(
+            f"{satname} {shoreline_date}: Less than 50 sand pixels detected within reference shoreline buffer. Using find_wl_contours1"
+        )
+        contours_mwi, t_mndwi = find_wl_contours1(im_mndwi, cloud_mask, im_ref_buffer)
+    else:
+        logger.info(
+            f"{satname} {shoreline_date}: Greater than 50 sand pixels detected within reference shoreline buffer. Using find_wl_contours2"
+        )
+        contours_mwi, t_mndwi = find_wl_contours2(
+            im_ms, im_labels, cloud_mask, im_ref_buffer
+        )
+
+    # Process contours into shoreline
+    shoreline = process_shoreline(
+        contours_mwi,
+        cloud_mask_adv,
+        im_nodata,
+        georef,
+        image_epsg,
+        settings,
+        logger=logger,
+    )
+
+    return shoreline, t_mndwi
+
+
+def compute_cloud_metrics(
+    cloud_mask: np.ndarray, im_nodata: np.ndarray
+) -> Tuple[float, float, np.ndarray]:
+    """
+    Compute cloud cover metrics from the given cloud and no-data masks.
+
+    Parameters:
+    ----------
+    cloud_mask : np.ndarray
+        Boolean array indicating initial cloud detection (True = cloud).
+    im_nodata : np.ndarray
+        Boolean array indicating no-data pixels (True = no data).
+
+    Returns:
+    -------
+    Tuple[float, float, np.ndarray]
+        - cloud_cover_combined: Fraction of cloud pixels over the total image (including no-data).
+        - cloud_cover: Fraction of cloud pixels over valid (non-no-data) pixels.
+        - cloud_mask_adv: Advanced cloud mask where no-data pixels are excluded.
+    """
+    cloud_cover_combined = np.sum(cloud_mask) / cloud_mask.size
+    # remove no data pixels from the cloud mask
+    # (for example L7 bands of no data should not be accounted for)
+    cloud_mask_adv = np.logical_xor(cloud_mask, im_nodata)
+    valid_pixels = np.sum(~im_nodata)
+
+    # compute updated cloud cover percentage (without no data pixels)
+    # Avoid division by zero if the entire image is no-data
+    cloud_cover = (
+        np.sum(cloud_mask_adv.astype(int)) / valid_pixels.astype(int)
+        if valid_pixels > 0
+        else 0.0
+    )
+
+    return cloud_cover_combined, cloud_cover, cloud_mask_adv
+
+
+def preprocess_image(
+    fn: Union[str, List[str]], satname: str, settings: Dict[str, Any], collection: str
+) -> Tuple[np.ndarray, Any, np.ndarray, np.ndarray]:
+    """
+    Preprocesses satellite imagery depending on the satellite type and returns the processed outputs.
+
+    Parameters:
+    ----------
+    fn : Union[str, List[str]]
+        Filename or list of filenames of the satellite image(s). For Sentinel-1 (SAR), a list of one file is expected.
+    satname : str
+        Name of the satellite, e.g., "S1" for Sentinel-1 or "S2" for Sentinel-2.
+    settings : Dict[str, Any]
+        Dictionary containing preprocessing configuration. Expected keys include:
+            - "apply_cloud_mask" (bool, optional): Whether to apply cloud masking (default is True).
+            - "cloud_mask_issue" (Any): Issue-specific configuration for cloud masking.
+            - "pan_off" (Any): Panchromatic settings.
+            - "s2cloudless_prob" (int, optional): Threshold probability for s2cloudless cloud masking (default is 60).
+    collection : str
+        Satellite data collection name (used by optical processing).
+
+    Returns:
+    -------
+    Tuple[np.ndarray, Any, np.ndarray, np.ndarray]
+        - im_ms: Multispectral image array.
+        - georef: Georeferencing metadata (varies by satellite).
+        - cloud_mask: Boolean array indicating cloud presence (True = cloud).
+        - im_nodata: Boolean array indicating no-data pixels (True = no data).
+    """
+    apply_cloud_mask = settings.get("apply_cloud_mask", True)
+
+    if satname == "S1":
+        im_ms, georef = SDS_tools.read_sar_image(fn[0])
+        im_nodata = np.zeros(im_ms.shape[:2], dtype=bool)
+        cloud_mask = np.zeros(im_ms.shape[:2], dtype=bool)
+        return im_ms, georef, cloud_mask, im_nodata
+    else:
+        im_ms, georef, cloud_mask, im_extra, im_QA, im_nodata = (
+            SDS_preprocess.preprocess_single(
+                fn,
+                satname,
+                settings["cloud_mask_issue"],
+                settings["pan_off"],
+                collection,
+                apply_cloud_mask,
+                settings.get("s2cloudless_prob", 60),
+            )
+        )
+        return im_ms, georef, cloud_mask, im_nodata
+
+
+def load_classifier(
+    satname: str, sand_color: str, model_path: str, sklearn_version: str
+) -> object:
+    """
+    Load the appropriate machine learning classifier based on satellite name and sand color.
+
+    Parameters:
+    ----------
+    satname : str
+        Name of the satellite (e.g., "L5", "L7", "L8", "L9", "S1", "S2").
+    sand_color : str
+        Type of sand reflectance ("dark", "bright", "default", "latest").
+    model_path : str
+        Path to the directory containing model .pkl files.
+    sklearn_version : str
+        Version string of scikit-learn (used to pick model compatibility).
+
+    Returns:
+    -------
+    object
+        Loaded classifier object.
+    """
+    str_new = "_new" if not sklearn_version.startswith("0.20") else ""
+
+    if satname == "S2":
+        model_file = f"NN_4classes_S2{str_new}.pkl"
+    else:
+        if sand_color == "dark":
+            model_file = f"NN_4classes_Landsat_dark{str_new}.pkl"
+        elif sand_color == "bright":
+            model_file = f"NN_4classes_Landsat_bright{str_new}.pkl"
+        elif sand_color == "latest":
+            model_file = f"NN_4classes_Landsat_latest{str_new}.pkl"
+        else:  # default or unrecognized value
+            model_file = f"NN_4classes_Landsat{str_new}.pkl"
+
+    full_model_path = os.path.join(model_path, model_file)
+    return joblib.load(full_model_path)
+
+
 def LineString_to_arr(line):
     return np.array(line.coords)
+
 
 def arr_to_LineString(arr):
     return LineString(arr)
@@ -58,10 +384,11 @@ def get_model_locations():
 
     return filepath_models
 
-def load_model(satname:str, settings:dict):
+
+def load_model(satname: str, settings: dict):
     """
     Loads the appropriate model based on the satellite name and settings.
-    
+
     Parameters:
     - satname (str): The satellite name (e.g., "L5", "L7", "L8", "L9", "S2").
     - settings (dict): A dictionary containing settings, particularly the "sand_color".
@@ -75,11 +402,11 @@ def load_model(satname:str, settings:dict):
 
     str_new = "_new" if not sklearn.__version__[:4] == "0.20" else ""
     clf = None
-    
+
     if satname in ["L5", "L7", "L8", "L9"]:
         pixel_size = 15
         model_filename = None
-        
+
         if settings["sand_color"] == "dark":
             model_filename = f"NN_4classes_Landsat_dark{str_new}.pkl"
         elif settings["sand_color"] == "bright":
@@ -88,16 +415,15 @@ def load_model(satname:str, settings:dict):
             model_filename = f"NN_4classes_Landsat{str_new}.pkl"
         elif settings["sand_color"] == "latest":
             model_filename = f"NN_4classes_Landsat_latest{str_new}.pkl"
-        
+
         if model_filename:
             clf = joblib.load(os.path.join(filepath_models, model_filename))
-            
+
     elif satname == "S2":
         pixel_size = 10
         clf = joblib.load(os.path.join(filepath_models, f"NN_4classes_S2{str_new}.pkl"))
-    
-    return clf, pixel_size
 
+    return clf, pixel_size
 
 
 def convert_gdf_to_array(gdf: gpd.GeoDataFrame) -> list:
@@ -120,6 +446,7 @@ def convert_gdf_to_array(gdf: gpd.GeoDataFrame) -> list:
         new_array.append(array)
     return new_array
 
+
 def convert_shoreline_to_array(gdf) -> np.ndarray:
     """
     Convert filtered shoreline GeoDataFrame to a numpy array.
@@ -134,9 +461,16 @@ def convert_shoreline_to_array(gdf) -> np.ndarray:
         return np.array([])
     else:
         x_array, y_array = gdf.geometry.iloc[0].coords.xy
-        return np.transpose(np.array([np.array(list(x_array)), np.array(list(y_array))]))
+        return np.transpose(
+            np.array([np.array(list(x_array)), np.array(list(y_array))])
+        )
 
-def get_extract_shoreline_extraction_area_array(shoreline_extraction_area:gpd.GeoDataFrame, output_epsg:int, roi_gdf:gpd.GeoDataFrame)->np.ndarray:
+
+def get_extract_shoreline_extraction_area_array(
+    shoreline_extraction_area: gpd.GeoDataFrame,
+    output_epsg: int,
+    roi_gdf: gpd.GeoDataFrame,
+) -> np.ndarray:
     """Extract the shoreline extraction area as a numpy array.
 
     Args:
@@ -150,17 +484,28 @@ def get_extract_shoreline_extraction_area_array(shoreline_extraction_area:gpd.Ge
     shoreline_extraction_area_array = []
     if shoreline_extraction_area is not None and not roi_gdf.empty:
         # Ensure the extraction area is in the correct CRS
-        shoreline_extraction_area_gdf = shoreline_extraction_area.to_crs(f"epsg:{output_epsg}")
+        shoreline_extraction_area_gdf = shoreline_extraction_area.to_crs(
+            f"epsg:{output_epsg}"
+        )
         roi_gdf = roi_gdf.to_crs(f"epsg:{output_epsg}")
 
         # Clip the shoreline extraction area to the region of interest
-        clipped_shoreline_extraction_area_gdf = shoreline_extraction_area_gdf.clip(roi_gdf)
+        clipped_shoreline_extraction_area_gdf = shoreline_extraction_area_gdf.clip(
+            roi_gdf
+        )
         if not clipped_shoreline_extraction_area_gdf.empty:
-            shoreline_extraction_area_array = convert_gdf_to_array(clipped_shoreline_extraction_area_gdf)
+            shoreline_extraction_area_array = convert_gdf_to_array(
+                clipped_shoreline_extraction_area_gdf
+            )
 
     return shoreline_extraction_area_array
 
-def filter_shoreline(shoreline,shoreline_extraction_area, output_epsg,):
+
+def filter_shoreline(
+    shoreline,
+    shoreline_extraction_area,
+    output_epsg,
+):
     """Filter the shoreline based on the extraction area.
 
     Args:
@@ -173,15 +518,23 @@ def filter_shoreline(shoreline,shoreline_extraction_area, output_epsg,):
     """
     if shoreline_extraction_area is not None:
         # Ensure both the shoreline and extraction area are in the same CRS.
-        shoreline_extraction_area_gdf = shoreline_extraction_area.to_crs(f"epsg:{output_epsg}")
+        shoreline_extraction_area_gdf = shoreline_extraction_area.to_crs(
+            f"epsg:{output_epsg}"
+        )
 
         # Convert the shoreline to a GeoDataFrame.
-        shoreline_gdf = create_gdf_from_type(shoreline,"lines",crs=f"epsg:{output_epsg}",)
+        shoreline_gdf = create_gdf_from_type(
+            shoreline,
+            "lines",
+            crs=f"epsg:{output_epsg}",
+        )
         if shoreline_gdf is None:
             return shoreline
 
         # Filter shorelines within the extraction area.
-        filtered_shoreline_gdf = ref_poly_filter(shoreline_extraction_area_gdf, shoreline_gdf)
+        filtered_shoreline_gdf = ref_poly_filter(
+            shoreline_extraction_area_gdf, shoreline_gdf
+        )
 
         # Convert the filtered shoreline back to a numpy array.
         shoreline = convert_shoreline_to_array(filtered_shoreline_gdf)
@@ -189,7 +542,16 @@ def filter_shoreline(shoreline,shoreline_extraction_area, output_epsg,):
     return shoreline
 
 
-def extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, sl_data,acc_georef, cloud_cover, output_epsg,roi_gdf):
+def extract_and_filter_shoreline(
+    shoreline_extraction_area,
+    shoreline,
+    satname,
+    sl_data,
+    acc_georef,
+    cloud_cover,
+    output_epsg,
+    roi_gdf,
+):
     """Extract and filter the shoreline based on the extraction area.
 
     Args:
@@ -211,8 +573,9 @@ def extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, 
     if shoreline_extraction_area is not None:
         # Ensure both the shoreline and extraction area are in the same CRS.
 
-        shoreline_extraction_area_gdf = shoreline_extraction_area.to_crs(f"epsg:{output_epsg}")
-        
+        shoreline_extraction_area_gdf = shoreline_extraction_area.to_crs(
+            f"epsg:{output_epsg}"
+        )
 
         # Convert the shoreline to a GeoDataFrame.
         shoreline_gdf = create_gdf(
@@ -223,32 +586,41 @@ def extract_and_filter_shoreline(shoreline_extraction_area, shoreline, satname, 
             cloud_cover,
             0,
             "lines",
-            crs = f"epsg:{output_epsg}", 
+            crs=f"epsg:{output_epsg}",
         )
         if shoreline_gdf is None:
             return shoreline, shoreline_extraction_area_array
         shoreline_gdf.reset_index(drop=True, inplace=True)
 
-
         # Filter shorelines within the extraction area.(unclipped version)
-        filtered_shoreline_gdf = ref_poly_filter(shoreline_extraction_area_gdf, shoreline_gdf)
+        filtered_shoreline_gdf = ref_poly_filter(
+            shoreline_extraction_area_gdf, shoreline_gdf
+        )
 
         # Convert the filtered shoreline back to a numpy array.
-        shoreline = convert_shoreline_to_array(filtered_shoreline_gdf, )
+        shoreline = convert_shoreline_to_array(
+            filtered_shoreline_gdf,
+        )
 
         # Convert the clipped extraction area into a numpy array(used later to plot the extraction area on the detection figure)
         # clip the shoreline extraction area to the region of interest
         if roi_gdf.empty:
-            raise ValueError("Region of interest is empty. Cannot clip shoreline extraction area.")
-        
+            raise ValueError(
+                "Region of interest is empty. Cannot clip shoreline extraction area."
+            )
+
         roi_gdf = roi_gdf.to_crs(f"epsg:{output_epsg}")
-        clipped_shoreline_extraction_area_gdf = shoreline_extraction_area_gdf.clip(roi_gdf)
-    
+        clipped_shoreline_extraction_area_gdf = shoreline_extraction_area_gdf.clip(
+            roi_gdf
+        )
+
         if not clipped_shoreline_extraction_area_gdf.empty:
-            shoreline_extraction_area_array = convert_gdf_to_array(clipped_shoreline_extraction_area_gdf)
-            
+            shoreline_extraction_area_array = convert_gdf_to_array(
+                clipped_shoreline_extraction_area_gdf
+            )
 
     return shoreline, shoreline_extraction_area_array
+
 
 def get_finite_data(data) -> np.ndarray:
     """
@@ -279,7 +651,7 @@ def create_gdf(
     idx: int,
     geomtype: str,
     crs: str = None,
-) :
+):
     """
     Creates a GeoDataFrame for a given shoreline and its attributes.
 
@@ -326,7 +698,7 @@ def create_gdf_from_type(
     shoreline: List[List[float]],
     geomtype: str,
     crs: str = None,
-) :
+):
     """
     Creates a GeoDataFrame for a given shoreline and its attributes.
 
@@ -345,7 +717,9 @@ def create_gdf_from_type(
     geom = create_geometry(geomtype, shoreline)
     if geom:
         # Creating a GeoDataFrame directly with all attributes
-        gdf = gpd.GeoDataFrame(geometry=[geom],)
+        gdf = gpd.GeoDataFrame(
+            geometry=[geom],
+        )
         if crs:
             gdf.crs = crs
         return gdf
@@ -353,7 +727,9 @@ def create_gdf_from_type(
     return None
 
 
-def ref_poly_filter(ref_poly_gdf:gpd.GeoDataFrame, raw_shorelines_gdf:gpd.GeoDataFrame)->gpd.GeoDataFrame:
+def ref_poly_filter(
+    ref_poly_gdf: gpd.GeoDataFrame, raw_shorelines_gdf: gpd.GeoDataFrame
+) -> gpd.GeoDataFrame:
     """
     Filters shorelines that are within a reference polygon.
     filters extracted shorelines that are not contained within a reference region/polygon
@@ -368,7 +744,9 @@ def ref_poly_filter(ref_poly_gdf:gpd.GeoDataFrame, raw_shorelines_gdf:gpd.GeoDat
     if ref_poly_gdf.empty:
         return raw_shorelines_gdf
 
-    ref_polygon = ref_poly_gdf.geometry.unary_union  # Combine all polygons into a single MultiPolygon if needed
+    ref_polygon = (
+        ref_poly_gdf.geometry.unary_union
+    )  # Combine all polygons into a single MultiPolygon if needed
 
     # Filter out lines that do not intersect the reference polygon
     raw_shorelines_gdf = raw_shorelines_gdf[raw_shorelines_gdf.intersects(ref_polygon)]
@@ -381,16 +759,44 @@ def ref_poly_filter(ref_poly_gdf:gpd.GeoDataFrame, raw_shorelines_gdf:gpd.GeoDat
             return None
         return arr_to_LineString(new_line_arr)
 
-    raw_shorelines_gdf.loc[:, 'geometry'] = raw_shorelines_gdf['geometry'].apply(filter_points_within_polygon)
-    raw_shorelines_gdf = raw_shorelines_gdf.dropna(subset=['geometry'])
+    raw_shorelines_gdf.loc[:, "geometry"] = raw_shorelines_gdf["geometry"].apply(
+        filter_points_within_polygon
+    )
+    raw_shorelines_gdf = raw_shorelines_gdf.dropna(subset=["geometry"])
 
     return raw_shorelines_gdf
+
+
+def get_pixel_size_for_satellite(satname: str) -> int:
+    """Returns the pixel size of a given satellite.
+    ["L5", "L7", "L8", "L9"] = 15 meters
+    "S2" = 10 meters
+    "S1" = 10 meters for VH
+
+    Args:
+        satname (str): A string indicating the name of the satellite.
+
+    Returns:
+        int: The pixel size of the satellite in meters.
+
+    Raises:
+        None.
+    """
+    pixel_size = 15
+    if satname in ["L5", "L7", "L8", "L9"]:
+        pixel_size = 15
+    elif satname == "S2":
+        pixel_size = 10
+    elif satname == "S1":
+        pixel_size = 10
+    return pixel_size
+
 
 # Main function for batch shoreline detection
 def extract_shorelines(
     metadata,
     settings,
-    output_directory:str=None,
+    output_directory: str = None,
     shoreline_extraction_area: gpd.GeoDataFrame = None,
 ):
     """
@@ -429,11 +835,11 @@ def extract_shorelines(
         'pan_off': bool
             if True, no pan-sharpening is performed on Landsat 7,8 and 9 imagery
         's2cloudless_prob': float [0,100)
-            threshold to identify cloud pixels in the s2cloudless probability mask            
+            threshold to identify cloud pixels in the s2cloudless probability mask
     output_directory: str (default: None)
         The directory to save the output files. If None, the output files will be saved in the same directory as the input files.
     shoreline_extraction_area: gpd.GeoDataFrame (default: None)
-        A geodataframe containing polygons indicating the areas to extract the shoreline from. Any shoreline outside of these polygons will be discarded.  
+        A geodataframe containing polygons indicating the areas to extract the shoreline from. Any shoreline outside of these polygons will be discarded.
 
     Returns:
     -----------
@@ -466,11 +872,11 @@ def extract_shorelines(
         )
     else:
         logger = setup_logger(
-        sitename_location,
-        "extract_shorelines_report",
-        log_format="%(levelname)s - %(message)s",
-    )
-        
+            sitename_location,
+            "extract_shorelines_report",
+            log_format="%(levelname)s - %(message)s",
+        )
+
     logger.info(f"Please read the following information carefully:\n")
     logger.info(
         "find_wl_contours2: A method for extracting shorelines that uses the sand water interface detected with the model to refine the threshold that's used to detect shorelines .\n  - This is the default method used when there are enough sand pixels within the reference shoreline buffer.\n"
@@ -510,49 +916,24 @@ def extract_shorelines(
         )  # index that were kept during the analysis (cloudy images are skipped)
         output_t_mndwi = []  # MNDWI threshold used to map the shoreline
 
-        # load classifiers (if sklearn version above 0.20, learn the new files)
-        str_new = ""
-        if not sklearn.__version__[:4] == "0.20":
-            str_new = "_new"
-        if satname in ["L5", "L7", "L8", "L9"]:
-            pixel_size = 15
-            if settings["sand_color"] == "dark":
-                clf = joblib.load(
-                    os.path.join(
-                        filepath_models, "NN_4classes_Landsat_dark%s.pkl" % str_new
-                    )
-                )
-            elif settings["sand_color"] == "bright":
-                clf = joblib.load(
-                    os.path.join(
-                        filepath_models, "NN_4classes_Landsat_bright%s.pkl" % str_new
-                    )
-                )
-            elif settings["sand_color"] == "default":
-                clf = joblib.load(
-                    os.path.join(filepath_models, "NN_4classes_Landsat%s.pkl" % str_new)
-                )
-            elif settings["sand_color"] == "latest":
-                clf = joblib.load(
-                    os.path.join(
-                        filepath_models, "NN_4classes_Landsat_latest%s.pkl" % str_new
-                    )
-                )
-        elif satname == "S2":
-            pixel_size = 10
-            clf = joblib.load(
-                os.path.join(filepath_models, "NN_4classes_S2%s.pkl" % str_new)
-            )
+        # load classifiers
+
+        # get the pixel size for the satellite eg. 15m for Landsat 5,7,8,9 and 10m for Sentinel 2
+        pixel_size = get_pixel_size_for_satellite(satname)
+
+        clf = load_classifier(
+            satname=satname,
+            sand_color=settings["sand_color"],
+            model_path=filepath_models,
+            sklearn_version=sklearn.__version__,
+        )
 
         # convert settings['min_beach_area'] from metres to pixels
         min_beach_area_pixels = np.ceil(settings["min_beach_area"] / pixel_size**2)
 
         # reduce min shoreline length for L7 because of the diagonal bands
-        if satname == "L7":
-            settings["min_length_sl"] = 200
-        else:
-            settings["min_length_sl"] = default_min_length_sl
-
+        settings["min_length_sl"] = 200 if satname == "L7" else default_min_length_sl
+        # set the minimum shoreline length for L7 to 200m due to the diagonal bands
         if satname == "L7":
             logger.info(
                 f"WARNING: CoastSat has hard-coded the value for the minimum shoreline length for L7 to 200\n\n"
@@ -563,64 +944,47 @@ def extract_shorelines(
 
         # loop through the images
         for i in tqdm(
-            range(len(filenames)), desc=f"{satname}: Mapping Shorelines", leave=True, position=0
+            range(len(filenames)),
+            desc=f"{satname}: Mapping Shorelines",
+            leave=True,
+            position=0,
         ):
-            apply_cloud_mask = settings.get("apply_cloud_mask", True)
             # get image filename
             fn = SDS_tools.get_filenames(filenames[i], filepath, satname)
             shoreline_date = os.path.basename(fn[0])[:19]
 
-            # preprocess image (cloud mask + pansharpening/downsampling)
             try:
-                (
-                    im_ms,
-                    georef,
-                    cloud_mask,
-                    im_extra,
-                    im_QA,
-                    im_nodata,
-                ) = SDS_preprocess.preprocess_single(
-                    fn,
-                    satname,
-                    settings["cloud_mask_issue"],
-                    settings["pan_off"],
-                    collection,
-                    apply_cloud_mask,
-                    settings.get("s2cloudless_prob",60),
+                im_ms, georef, cloud_mask, im_nodata = preprocess_image(
+                    fn=fn,
+                    satname=satname,
+                    settings=settings,
+                    collection=collection,
                 )
             except FileNotFoundError as e:
-                logger.error(f"Could not extract shoreline for {shoreline_date} due to missing files.{e}")
+                logger.error(
+                    f"Could not extract shoreline for {shoreline_date} due to missing files.{e}"
+                )
                 print(
                     f"\nCould not extract shoreline for {shoreline_date} due to missing files.{e}"
                 )
+                continue
+
             # get image spatial reference system (epsg code) from metadata dict
             image_epsg = metadata[satname]["epsg"][i]
 
-            # compute cloud_cover percentage (with no data pixels)
-            cloud_cover_combined = np.sum(cloud_mask) / cloud_mask.size
+            cloud_cover_combined, cloud_cover, cloud_mask_adv = compute_cloud_metrics(
+                cloud_mask=cloud_mask, im_nodata=im_nodata
+            )
 
-            if cloud_cover_combined > 0.99:  # if 99% of cloudy pixels in image skip
-                logger.error(
-                    f"Skipping {satname} {shoreline_date} due to cloud & no data pixels exceeding the maximum percentage allowed: {cloud_cover_combined:.2%} > 99%\n\n"
-                )
+            if should_skip_image(
+                cloud_cover_combined=cloud_cover_combined,
+                cloud_cover=cloud_cover,
+                settings=settings,
+                logger=logger,
+                satname=satname,
+                date_str=shoreline_date,
+            ):
                 continue
-
-            # remove no data pixels from the cloud mask
-            # (for example L7 bands of no data should not be accounted for)
-
-            cloud_mask_adv = np.logical_xor(cloud_mask, im_nodata)
-
-            # compute updated cloud cover percentage (without no data pixels)
-            valid_pixels = np.sum(~im_nodata)
-            cloud_cover = np.sum(cloud_mask_adv.astype(int)) / valid_pixels.astype(int)
-            # skip image if cloud cover is above user-defined threshold
-            if cloud_cover > settings["cloud_thresh"]:
-                logger.error(
-                    f"Skipping {satname} {shoreline_date} due to cloud cover percentage exceeding cloud threshold: {cloud_cover:.2%} > {settings['cloud_thresh']:.2%}.\n\n"
-                )
-                continue
-            else:
-                logger.info(f"\nProcessing image {satname} {shoreline_date}")
 
             logger.info(f"{satname} {shoreline_date} cloud cover : {cloud_cover:.2%}")
 
@@ -629,71 +993,85 @@ def extract_shorelines(
                 cloud_mask.shape, georef, image_epsg, pixel_size, settings
             )
 
-            # classify image in 4 classes (sand, whitewater, water, other) with NN classifier
-            im_classif, im_labels = classify_image_NN(
-                im_ms, cloud_mask, min_beach_area_pixels, clf
-            )
-            # sand, whitewater, water, other
-            class_mapping = {
-                0: "sand",
-                1: "whitewater",
-                2: "water",
-            }
+            if satname == "S1":
+                # apply the median filter before applying the otsu threshold
+                # im_ms[:, :, 0] = SDS_tools.median_filter(im_ms[:, :, 0], 3)
 
-            logger.info(
-                f"{satname} {shoreline_date}: "
-                + f" ,".join(
-                    f"{class_name}: {np.sum(im_labels[:, :, index])/im_labels[:, :, index].size:.2%}"
-                    for index, class_name in class_mapping.items()
+                im_ms[:, :, 0] = scipy.ndimage.median_filter(im_ms[:, :, 0], size=15)
+
+                # instead of applying the classifier here, we will apply the otsu threshold
+                otsu_image, threshold = otsu_threshold(
+                    im_ms[:, :, 0], settings["min_beach_area"]
                 )
-            )
-
-            # if adjust_detection is True, let the user adjust the detected shoreline
-            if settings["adjust_detection"]:
-                date = filenames[i][:19]
-                skip_image, shoreline, t_mndwi = adjust_detection(
-                    im_ms,
-                    cloud_mask,
-                    im_nodata,
-                    im_labels,
-                    im_ref_buffer,
-                    image_epsg,
-                    georef,
-                    settings,
-                    date,
-                    satname,
+                shoreline = find_shoreline_SAR(
+                    otsu_image, im_ref_buffer, georef, image_epsg, settings
                 )
-                # if the user decides to skip the image, continue and do not save the mapped shoreline
-                if skip_image:
-                    continue
+                im_labels = otsu_image
+                # convert from list to number if list
+                t_mndwi = (
+                    threshold[0]
+                    if isinstance(threshold, (list, np.ndarray))
+                    else threshold
+                )
 
-            # otherwise map the contours automatically with one of the two following functions:
-            # if there are pixels in the 'sand' class --> use find_wl_contours2 (enhanced)
-            # otherwise use find_wl_contours1 (traditional)
             else:
+                # classify image in 4 classes (sand, whitewater, water, other) with NN classifier
+                im_classif, im_labels = classify_image_NN(
+                    im_ms, cloud_mask, min_beach_area_pixels, clf
+                )
+
+                # sand, whitewater, water, other
+                class_mapping = {
+                    0: "sand",
+                    1: "whitewater",
+                    2: "water",
+                }
+
+                logger.info(
+                    f"{satname} {shoreline_date}: "
+                    + f" ,".join(
+                        f"{class_name}: {np.sum(im_labels[:, :, index])/im_labels[:, :, index].size:.2%}"
+                        for index, class_name in class_mapping.items()
+                    )
+                )
+
+                # if adjust_detection is True, let the user adjust the detected shoreline
+                if settings["adjust_detection"]:
+                    date = filenames[i][:19]
+                    skip_image, shoreline, t_mndwi = adjust_detection(
+                        im_ms,
+                        cloud_mask,
+                        im_nodata,
+                        im_labels,
+                        im_ref_buffer,
+                        image_epsg,
+                        georef,
+                        settings,
+                        date,
+                        satname,
+                    )
+                    # if the user decides to skip the image, continue and do not save the mapped shoreline
+                    if skip_image:
+                        continue
+                # otherwise map the contours automatically with one of the two following functions:
+                # if there are pixels in the 'sand' class --> use find_wl_contours2 (enhanced)
+                # otherwise use find_wl_contours1 (traditional)
+
                 try:  # use try/except structure for long runs
-                    if (
-                        sum(im_labels[im_ref_buffer, 0]) < 50
-                    ):  # minimum number of sand pixels
-                        # compute MNDWI image (SWIR-G)
-                        im_mndwi = SDS_tools.nd_index(
-                            im_ms[:, :, 4], im_ms[:, :, 1], cloud_mask
-                        )
-                        logger.info(
-                            f"{satname} {shoreline_date}: Less than 50 sand pixels detected within reference shoreline buffer. Using find_wl_contours1"
-                        )
-                        # find water contours on MNDWI grayscale image
-                        contours_mwi, t_mndwi = find_wl_contours1(
-                            im_mndwi, cloud_mask, im_ref_buffer
-                        )
-                    else:
-                        logger.info(
-                            f"{satname} {shoreline_date}: Greater than 50 sand pixels detected within reference shoreline buffer. Using find_wl_contours2"
-                        )
-                        # use classification to refine threshold and extract the sand/water interface
-                        contours_mwi, t_mndwi = find_wl_contours2(
-                            im_ms, im_labels, cloud_mask, im_ref_buffer
-                        )
+                    shoreline, t_mndwi = find_shoreline_optical(
+                        im_ms,
+                        im_labels,
+                        im_ref_buffer,
+                        cloud_mask,
+                        cloud_mask_adv,
+                        im_nodata,
+                        georef,
+                        image_epsg,
+                        satname,
+                        shoreline_date,
+                        settings,
+                        logger=logger,
+                    )
                 except Exception as e:
                     print(
                         f"{satname} {shoreline_date}: Could not map shoreline due to error {str(e)}"
@@ -703,51 +1081,52 @@ def extract_shorelines(
                     )
                     continue
 
-                # process the water contours into a shoreline (shorelines are in the epsg of the image)
-                shoreline = process_shoreline(
-                    contours_mwi,
-                    cloud_mask_adv,
-                    im_nodata,
-                    georef,
-                    image_epsg,
-                    settings,
-                    logger=logger,
+            # convert the polygon coordinates of ROI to gdf
+            height, width = im_ms.shape[:2]
+            output_epsg = settings["output_epsg"]
+            date = filenames[i][:19]
+            roi_gdf = SDS_preprocess.create_gdf_from_image_extent(
+                height, width, georef, image_epsg, output_epsg
+            )
+
+            # filter shorelines within the extraction area
+            shoreline = filter_shoreline(
+                shoreline, shoreline_extraction_area, output_epsg
+            )
+            shoreline_extraction_area_array = (
+                get_extract_shoreline_extraction_area_array(
+                    shoreline_extraction_area, output_epsg, roi_gdf
                 )
-                
-                # convert the polygon coordinates of ROI to gdf
-                height,width=im_ms.shape[:2]
-                output_epsg = settings["output_epsg"]
+            )
+
+            # visualize the mapped shorelines, there are two options:
+            # if settings['check_detection'] = True, shows the detection to the user for accept/reject
+            # if settings['save_figure'] = True, saves a figure for each mapped shoreline
+            if settings["check_detection"] or settings["save_figure"]:
                 date = filenames[i][:19]
-                roi_gdf = SDS_preprocess.create_gdf_from_image_extent(height,width, georef,image_epsg,output_epsg)
-                
-                # filter shorelines within the extraction area
-                shoreline = filter_shoreline( shoreline,shoreline_extraction_area,output_epsg)
-                shoreline_extraction_area_array = get_extract_shoreline_extraction_area_array(shoreline_extraction_area, output_epsg, roi_gdf)
-                
-                # visualize the mapped shorelines, there are two options:
-                # if settings['check_detection'] = True, shows the detection to the user for accept/reject
-                # if settings['save_figure'] = True, saves a figure for each mapped shoreline
-                if settings["check_detection"] or settings["save_figure"]:
-                    date = filenames[i][:19]
-                    if not settings["check_detection"]:
-                        plt.ioff()  # turning interactive plotting off 
-                    skip_image = show_detection(
-                        im_ms,
-                        cloud_mask,
-                        im_labels,
-                        shoreline,
-                        image_epsg,
-                        georef,
-                        settings,
-                        date,
-                        satname,
-                        im_ref_buffer,
-                        output_directory,
-                        shoreline_extraction_area_array,
-                    )
-                    # if the user decides to skip the image, continue and do not save the mapped shoreline
-                    if skip_image:
-                        continue
+                if not settings["check_detection"]:
+                    plt.ioff()  # turning interactive plotting off
+                from coastsat.SDS_plotting import plot_detection
+
+                skip_image = plot_detection(
+                    im_ms,
+                    im_labels,
+                    shoreline,
+                    image_epsg,
+                    georef,
+                    settings,
+                    date,
+                    satname,
+                    im_ref_buffer=im_ref_buffer,
+                    output_directory=output_directory,
+                    cloud_mask=cloud_mask,
+                    shoreline_extraction_area=shoreline_extraction_area_array,
+                    is_sar=True if satname == "S1" else False,
+                )
+
+                # if the user decides to skip the image, continue and do not save the mapped shoreline
+                if skip_image:
+                    continue
 
             # append to output variables
             output_timestamp.append(metadata[satname]["dates"][i])
@@ -780,7 +1159,7 @@ def extract_shorelines(
     # don't do this for now
     # if output_directory is not None:
     #     filepath = output_directory
-        
+
     filepath = os.path.join(filepath_data, sitename)
     if not os.path.exists(filepath):
         os.makedirs(filepath)
@@ -897,9 +1276,9 @@ def classify_image_NN(im_ms, cloud_mask, min_beach_area, clf):
     vec_features = calculate_features(
         im_ms, cloud_mask, np.ones(cloud_mask.shape).astype(bool)
     )
-    vec_features[
-        np.isnan(vec_features)
-    ] = 1e-9  # NaN values are create when std is too close to 0
+    vec_features[np.isnan(vec_features)] = (
+        1e-9  # NaN values are create when std is too close to 0
+    )
 
     # remove NaNs and cloudy pixels
     vec_cloud = cloud_mask.reshape(cloud_mask.shape[0] * cloud_mask.shape[1])
@@ -921,6 +1300,72 @@ def classify_image_NN(im_ms, cloud_mask, min_beach_area, clf):
     im_swash = im_classif == 2
     im_water = im_classif == 3
     # remove small patches of sand or water that could be around the image (usually noise)
+    im_sand = morphology.remove_small_objects(
+        im_sand, min_size=min_beach_area, connectivity=2
+    )
+    im_water = morphology.remove_small_objects(
+        im_water, min_size=min_beach_area, connectivity=2
+    )
+
+    im_labels = np.stack((im_sand, im_swash, im_water), axis=-1)
+
+    return im_classif, im_labels
+
+
+def classify_image_NN_sar(im_sar, cloud_mask, min_beach_area, clf):
+    """
+    Classifies every pixel in SAR imagery in one of 4 classes:
+        - sand                                          --> label = 1
+        - whitewater (breaking waves and swash)         --> label = 2
+        - water                                         --> label = 3
+        - other (vegetation, buildings, rocks...)       --> label = 0
+
+    The classifier is a Neural Network that is already trained.
+
+    Arguments:
+    -----------
+    im_sar: np.array
+        SAR image with shape (x, y, 1)
+    cloud_mask: np.array
+        2D cloud mask with True where cloud pixels are
+    min_beach_area: int
+        Minimum number of pixels that have to be connected to belong to the SAND class
+    clf: joblib object
+        Pre-trained classifier
+
+    Returns:
+    -----------
+    im_classif: np.array
+        2D image containing labels
+    im_labels: np.array of booleans
+        3D image containing a boolean image for each class (im_classif == label)
+    """
+    # Flatten the SAR image and cloud mask
+    vec_sar = im_sar.reshape(-1, 3)  # Reshape to (num_pixels, 3)
+    vec_cloud = cloud_mask.flatten()
+
+    # Remove cloudy pixels
+    vec_mask = vec_cloud
+    vec_sar = vec_sar[~vec_mask, :]
+
+    # Handle NaN or infinite values
+    vec_sar[np.isnan(vec_sar)] = 1e-9
+    vec_sar[np.isinf(vec_sar)] = 1e-9
+
+    # Classify pixels
+    labels = clf.predict(vec_sar)
+
+    # Recompose the classified image
+    vec_classif = np.nan * np.ones(im_sar.shape[0] * im_sar.shape[1])
+    vec_classif[~vec_mask] = labels
+    im_classif = vec_classif.reshape(im_sar.shape[:2])
+
+    # Create a stack of boolean images for each label
+    im_sand = im_classif == 1
+    im_swash = im_classif == 2
+    im_water = im_classif == 3
+
+    # Remove small patches of sand or water that could be noise
     im_sand = morphology.remove_small_objects(
         im_sand, min_size=min_beach_area, connectivity=2
     )
@@ -966,10 +1411,10 @@ def find_wl_contours1(im_ndwi, cloud_mask, im_ref_buffer):
     """
     nrows = cloud_mask.shape[0]
     ncols = cloud_mask.shape[1]
-    
+
     # create a buffer around the reference shoreline and reshape it into a vector
     vec_buffer = im_ref_buffer.reshape(nrows * ncols)
-    
+
     # reshape spectral index image to vector
     vec_ndwi = im_ndwi.reshape(nrows * ncols)
     # keep pixels that are in the buffer and not in the cloud mask
@@ -1325,6 +1770,128 @@ def process_shoreline(
 ###################################################################################################
 
 
+# Normalize SAR image for display (simulate .convert("L"))
+def normalize_grayscale(image):
+    p_low, p_high = np.percentile(image, (1, 99))  # Ignore extreme outliers
+    image_clipped = np.clip(image, p_low, p_high)
+    return (image_clipped - p_low) / (p_high - p_low)
+
+
+def show_sar_detection(
+    im_ms,
+    im_labels,
+    shoreline,
+    image_epsg,
+    georef,
+    settings,
+    date,
+    satname,
+    im_ref_buffer=None,
+    output_directory: str = None,
+):
+    """
+    Shows the detected shoreline on SAR imagery.
+
+    Arguments:
+    -----------
+    im_ms: np.array
+        2D SAR image
+    im_labels: np.array
+        2D binary segmentation mask (e.g., from Otsu)
+    shoreline: np.array
+        array of shoreline coordinates (X, Y)
+    image_epsg: int
+        EPSG of image CRS
+    georef: np.array
+        GDAL geotransform
+    settings: dict
+        Includes saving and directory config
+    date: str
+        Image capture date
+    satname: str
+        Satellite name
+    im_ref_buffer: np.array (optional)
+        Reference shoreline buffer (bool mask)
+    output_directory: str (optional)
+        Directory to save output
+    """
+    sitename = settings["inputs"]["sitename"]
+    filepath_data = settings["inputs"]["filepath"]
+    filepath = (
+        os.path.join(output_directory, "jpg_files", "detection")
+        if output_directory
+        else os.path.join(filepath_data, sitename, "jpg_files", "detection")
+    )
+    os.makedirs(filepath, exist_ok=True)
+
+    # Convert shoreline world to pixel coordinates
+    try:
+        sl_pix = SDS_tools.convert_world2pix(
+            SDS_tools.convert_epsg(shoreline, settings["output_epsg"], image_epsg)[
+                :, [0, 1]
+            ],
+            georef,
+        )
+    except:
+        sl_pix = np.array([[np.nan, np.nan], [np.nan, np.nan]])
+
+    # Prepare figure
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 7))
+
+    # define legend elements
+    shoreline_line = mlines.Line2D([], [], color="red", label="Shoreline")
+    buffer_patch = mpatches.Patch(
+        color="red", alpha=0.4, label="Reference shoreline buffer"
+    )
+    otsu_patch_1 = mpatches.Patch(color="yellow", label="Otsu class 1")
+    otsu_patch_2 = mpatches.Patch(color="blue", label="Otsu class 2")
+
+    # First plot: raw SAR image with shoreline
+    im_display = normalize_grayscale(im_ms)
+    ax1.imshow(im_display, cmap="gray")  # plot the SAR image
+    ax1.plot(sl_pix[:, 0], sl_pix[:, 1], "r.", markersize=1)  # plot the shoreline
+    ax1.set_title(satname, fontweight="bold", fontsize=14)
+    ax1.axis("off")
+
+    # add legend to the 2nd plot
+    ax2.legend(
+        handles=[shoreline_line, buffer_patch, otsu_patch_1, otsu_patch_2],
+        loc="lower right",
+        fontsize=9,
+    )
+
+    # Convert to int for display: False=0, True=1
+    im_labels_display = im_labels.astype(int)
+
+    # Use same custom colormap
+    from matplotlib.colors import ListedColormap
+
+    otsu_cmap = ListedColormap(["yellow", "blue"])
+    ax2.imshow(im_labels_display, cmap=otsu_cmap, alpha=0.3)
+
+    # Second plot: SAR image + Otsu segmentation + overlays
+    ax2.imshow(im_display, cmap="gray")
+    # ax2.imshow(im_labels, cmap="autumn", alpha=0.3)  # plot the Otsu segmentation
+    ax2.imshow(im_labels_display, cmap=otsu_cmap, alpha=0.3)
+    if im_ref_buffer is not None:
+        ax2.imshow(
+            np.ma.masked_where(~im_ref_buffer, im_ref_buffer), cmap="PiYG", alpha=0.5
+        )
+    ax2.plot(sl_pix[:, 0], sl_pix[:, 1], "r.", markersize=1)
+    ax2.set_title(date, fontweight="bold", fontsize=14)
+    ax2.axis("off")
+
+    # Save output
+    if settings["save_figure"]:
+        fig.savefig(
+            os.path.join(filepath, f"{date}_{satname}.jpg"),
+            dpi=150,
+            bbox_inches="tight",
+        )
+    plt.close(fig)
+    return False
+
+
 def show_detection(
     im_ms,
     cloud_mask,
@@ -1336,8 +1903,9 @@ def show_detection(
     date,
     satname,
     im_ref_buffer=None,
-    output_directory:str=None,
-    shoreline_extraction_area:np.ndarray=None,
+    output_directory: str = None,
+    shoreline_extraction_area: np.ndarray = None,
+    sar_image: bool = False,
 ):
     """
     Shows the detected shoreline to the user for visual quality control.
@@ -1378,8 +1946,8 @@ def show_detection(
     output_directory: str
         path to the output directory to save the jpg file. If none, the jpg file will be saved at the same location as the input image.
         The jpg files will be saved at output_directory/jpg_files/detection or if output_directory is None, at filepath/jpg_files/detection
-    
-    
+
+
     Returns:
     -----------
     skip_image: boolean
@@ -1397,13 +1965,16 @@ def show_detection(
     else:
         # subfolder where the .jpg file is stored if the user accepts the shoreline detection
         filepath = os.path.join(filepath_data, sitename, "jpg_files", "detection")
-        
+
         if not os.path.exists(filepath):
             os.makedirs(filepath)
 
-    im_RGB = SDS_preprocess.rescale_image_intensity(
-        im_ms[:, :, [2, 1, 0]], cloud_mask, 99.9
-    )
+    if sar_image:
+        im_RGB = im_ms
+    else:
+        im_RGB = SDS_preprocess.rescale_image_intensity(
+            im_ms[:, :, [2, 1, 0]], cloud_mask, 99.9
+        )
 
     # compute classified image
     im_class = np.copy(im_RGB)
@@ -1413,13 +1984,18 @@ def show_detection(
     colours[0, :] = colorpalette[5]
     colours[1, :] = np.array([204 / 255, 1, 1, 1])
     colours[2, :] = np.array([0, 91 / 255, 1, 1])
-    for k in range(0, im_labels.shape[2]):
-        im_class[im_labels[:, :, k], 0] = colours[k, 0]
-        im_class[im_labels[:, :, k], 1] = colours[k, 1]
-        im_class[im_labels[:, :, k], 2] = colours[k, 2]
 
-    # compute MNDWI grayscale image
-    im_mwi = SDS_tools.nd_index(im_ms[:, :, 4], im_ms[:, :, 1], cloud_mask)
+    # check the shape of im_labels
+    if im_labels.ndim == 2:
+        # if im_labels is 2D, add a third dimension with only one channel
+        im_labels = np.expand_dims(im_labels, axis=2)
+        im_class = im_labels.copy()
+
+    else:
+        for k in range(0, im_labels.shape[2]):
+            im_class[im_labels[:, :, k], 0] = colours[k, 0]
+            im_class[im_labels[:, :, k], 1] = colours[k, 1]
+            im_class[im_labels[:, :, k], 2] = colours[k, 2]
 
     # transform world coordinates of shoreline into pixel coordinates
     # use try/except in case there are no coordinates to be transformed (shoreline = [])
@@ -1433,18 +2009,23 @@ def show_detection(
     except:
         # if try fails, just add nan into the shoreline vector so the next parts can still run
         sl_pix = np.array([[np.nan, np.nan], [np.nan, np.nan]])
-        
+
     shoreline_extraction_area_pix = np.array([[np.nan, np.nan], [np.nan, np.nan]])
-    shoreline_extraction_area_pix  = []
+    shoreline_extraction_area_pix = []
     if shoreline_extraction_area is not None:
         if len(shoreline_extraction_area) == 0:
             shoreline_extraction_area = None
-            
+
     if shoreline_extraction_area is not None:
-        shoreline_extraction_area_pix  = []
+        shoreline_extraction_area_pix = []
         for idx in range(len(shoreline_extraction_area)):
             shoreline_extraction_area_pix.append(
-                SDS_preprocess.transform_world_coords_to_pixel_coords(shoreline_extraction_area[idx],settings["output_epsg"], georef, image_epsg)
+                SDS_preprocess.transform_world_coords_to_pixel_coords(
+                    shoreline_extraction_area[idx],
+                    settings["output_epsg"],
+                    georef,
+                    image_epsg,
+                )
             )
 
     if plt.get_fignums():
@@ -1480,12 +2061,15 @@ def show_detection(
     im_RGB = np.where(np.isnan(im_RGB), nan_color, im_RGB)
     im_class = np.where(np.isnan(im_class), 1.0, im_class)
 
-
-
     ax1.imshow(im_RGB)
     ax1.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
     for idx in range(len(shoreline_extraction_area_pix)):
-        ax1.plot(shoreline_extraction_area_pix[idx][:, 0], shoreline_extraction_area_pix[idx][:, 1], color='#cb42f5', markersize=1)
+        ax1.plot(
+            shoreline_extraction_area_pix[idx][:, 0],
+            shoreline_extraction_area_pix[idx][:, 1],
+            color="#cb42f5",
+            markersize=1,
+        )
     ax1.axis("off")
     ax1.set_title(sitename, fontweight="bold", fontsize=16)
 
@@ -1503,7 +2087,12 @@ def show_detection(
         ax2.imshow(masked_array, cmap=masked_cmap, alpha=0.60)
     ax2.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
     for idx in range(len(shoreline_extraction_area_pix)):
-        ax2.plot(shoreline_extraction_area_pix[idx][:, 0], shoreline_extraction_area_pix[idx][:, 1], color='#cb42f5', markersize=1)
+        ax2.plot(
+            shoreline_extraction_area_pix[idx][:, 0],
+            shoreline_extraction_area_pix[idx][:, 1],
+            color="#cb42f5",
+            markersize=1,
+        )
     ax2.axis("off")
     orange_patch = mpatches.Patch(color=colours[0, :], label="sand")
     white_patch = mpatches.Patch(color=colours[1, :], label="whitewater")
@@ -1513,9 +2102,18 @@ def show_detection(
         color="#800000", alpha=0.80, label="reference shoreline buffer"
     )
     if shoreline_extraction_area is not None:
-        shoreline_extraction_area_line = mlines.Line2D([], [], color="#cb42f5", linestyle="-", label="shoreline extraction area")
+        shoreline_extraction_area_line = mlines.Line2D(
+            [], [], color="#cb42f5", linestyle="-", label="shoreline extraction area"
+        )
         ax2.legend(
-            handles=[orange_patch, white_patch, blue_patch, black_line,shoreline_extraction_area_line, buffer_patch],
+            handles=[
+                orange_patch,
+                white_patch,
+                blue_patch,
+                black_line,
+                shoreline_extraction_area_line,
+                buffer_patch,
+            ],
             bbox_to_anchor=(1, 0.5),
             fontsize=10,
         )
@@ -1527,15 +2125,23 @@ def show_detection(
         )
     ax2.set_title(date, fontweight="bold", fontsize=16)
 
-    # create image 3 (MNDWI)
-    ax3.imshow(im_mwi, cmap="bwr")
-    if masked_array is not None:
-        ax3.imshow(masked_array, cmap=masked_cmap, alpha=0.60)
-    ax3.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
-    for idx in range(len(shoreline_extraction_area_pix)):
-        ax3.plot(shoreline_extraction_area_pix[idx][:, 0], shoreline_extraction_area_pix[idx][:, 1], color='#cb42f5', markersize=1)
-    ax3.axis("off")
-    ax3.set_title(satname, fontweight="bold", fontsize=16)
+    if not sar_image:
+        # compute MNDWI grayscale image
+        im_mwi = SDS_tools.nd_index(im_ms[:, :, 4], im_ms[:, :, 1], cloud_mask)
+        # create image 3 (MNDWI)
+        ax3.imshow(im_mwi, cmap="bwr")
+        if masked_array is not None:
+            ax3.imshow(masked_array, cmap=masked_cmap, alpha=0.60)
+        ax3.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
+        for idx in range(len(shoreline_extraction_area_pix)):
+            ax3.plot(
+                shoreline_extraction_area_pix[idx][:, 0],
+                shoreline_extraction_area_pix[idx][:, 1],
+                color="#cb42f5",
+                markersize=1,
+            )
+        ax3.axis("off")
+        ax3.set_title(satname, fontweight="bold", fontsize=16)
 
     # additional options
     #    ax1.set_anchor('W')
@@ -1612,7 +2218,11 @@ def show_detection(
 
     # if save_figure is True, save a .jpg under /jpg_files/detection
     if settings["save_figure"] and not skip_image:
-        fig.savefig(os.path.join(filepath, date + "_" + satname + ".jpg"), dpi=150,bbox_inches='tight')
+        fig.savefig(
+            os.path.join(filepath, date + "_" + satname + ".jpg"),
+            dpi=150,
+            bbox_inches="tight",
+        )
 
     # don't close the figure window, but remove all axes and settings, ready for next plot
     for ax in fig.axes:
