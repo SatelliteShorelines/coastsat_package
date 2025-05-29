@@ -1,13 +1,77 @@
 import os
+from typing import Dict, Any, Optional, List
+
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib import gridspec, patches as mpatches, lines as mlines
-from matplotlib.colors import ListedColormap
 import matplotlib
 import matplotlib.patches as mpatches
-import matplotlib.lines as mlines
-from typing import Dict, Any, Optional
+import matplotlib.pyplot as plt
+from matplotlib import gridspec, lines as mlines
+from matplotlib.colors import ListedColormap
+
+
 from coastsat import SDS_preprocess, SDS_tools
+
+
+def transform_shoreline_area_to_pixel_coords(
+    shoreline_extraction_area: Optional[List[np.ndarray]],
+    output_epsg: int,
+    georef: np.ndarray,
+    image_epsg: int,
+    transform_func,
+) -> List[np.ndarray]:
+    """
+    Transforms a list of world coordinates into pixel coordinates using a transformation function.
+
+    Args:
+        shoreline_extraction_area (Optional[List[np.ndarray]]):
+            The input list of world coordinates (or None).
+            Example:
+            [array([[ 606270.9268185 , 4079016.66886246],
+                    [ 606967.96694302, 4077461.14324242],
+                    [ 607305.27201052, 4076390.54086919],
+                    [ 607289.08625894, 4076373.12052936],
+                    [ 606690.57810944, 4076373.12052936],
+                    [ 606061.90757097, 4077987.18491909],
+                    [ 605284.49195324, 4079756.58371796],
+                    [ 604687.47197666, 4080853.12052936],
+                    [ 605266.43466503, 4080853.12052936],
+                    [ 606270.9268185 , 4079016.66886246]])]
+        output_epsg (int): EPSG code for the world coordinate system.
+        georef (np.ndarray): Georeferencing metadata used for transformation.
+            Example:  [ 6.04075722e+05  1.00000000e+01  0.00000000e+00  4.08085444e+06, 0.00000000e+00 -1.00000000e+01]
+        image_epsg (int): EPSG code of the image coordinate system.
+            Example : 32610 for UTM zone 10N.
+        transform_func (callable): Function to perform the world-to-pixel transformation.
+            Example: SDS_preprocess.transform_world_coords_to_pixel_coords - default transformation function.
+
+    Returns:
+        the transformed pixel coordinates as a list of tuples (x, y) or an empty list if the input is None or empty.
+        Example:
+        Shoreline extraction area in pixel coordinates:
+            [array([[ 2.20236444e+02,  1.83645167e+02],
+                [ 2.89940456e+02,  3.39197729e+02],
+                [ 3.23670963e+02,  4.46257966e+02],
+                [ 3.22052388e+02,  4.48000000e+02],
+                [ 2.62201573e+02,  4.48000000e+02],
+                [ 1.99334519e+02,  2.86593561e+02],
+                [ 1.21592957e+02,  1.09653681e+02],
+                [ 6.18909597e+01, -5.82076609e-11],
+                [ 1.19787229e+02, -5.82076609e-11],
+                [ 2.20236444e+02,  1.83645167e+02]])]
+    """
+    if not shoreline_extraction_area:
+        return []
+
+    if shoreline_extraction_area is not None:
+        if len(shoreline_extraction_area) == 0:
+            return []
+
+    pixel_coords = [
+        transform_func(coord, output_epsg, georef, image_epsg)
+        for coord in shoreline_extraction_area
+    ]
+
+    return pixel_coords
 
 
 def plot_detection(
@@ -56,8 +120,16 @@ def plot_detection(
         shoreline, settings["output_epsg"], image_epsg, georef
     )
 
+    shoreline_extraction_area_pix = transform_shoreline_area_to_pixel_coords(
+        shoreline_extraction_area,
+        output_epsg=settings["output_epsg"],
+        georef=georef,
+        image_epsg=image_epsg,
+        transform_func=SDS_preprocess.transform_world_coords_to_pixel_coords,
+    )
+
     if is_sar:
-        return _plot_sar_detection(
+        return plot_sar_detection(
             im_ms,
             im_labels,
             sl_pix,
@@ -66,9 +138,10 @@ def plot_detection(
             im_ref_buffer,
             output_path,
             settings,
+            shoreline_extraction_area=shoreline_extraction_area_pix,
         )
     else:
-        return _plot_optical_detection(
+        return plot_optical_detection(
             im_ms,
             im_labels,
             cloud_mask,
@@ -78,8 +151,8 @@ def plot_detection(
             im_ref_buffer,
             output_path,
             settings,
-            shoreline_extraction_area,
             sitename,
+            shoreline_extraction_area=shoreline_extraction_area_pix,
         )
 
 
@@ -105,7 +178,32 @@ def _normalize_grayscale(im):
     return np.clip((im - im_min) / (im_max - im_min), 0, 1)
 
 
-def _plot_sar_detection(
+def determine_layout(im_shape):
+    """
+    Determines the appropriate subplot layout based on image aspect ratio. By default, it uses a horizontal layout.
+
+    Args:
+        im_shape (tuple): Shape of the image (height, width[, channels])
+
+    Returns:
+        gs (GridSpec): GridSpec layout
+        ax_indices (tuple): ((ax1_idx), (ax2_idx), (ax3_idx)) as grid positions
+        legend_settings (dict): Dict with bbox_to_anchor and loc for legends
+    """
+    height, width = im_shape[:2]
+    if height > 2.5 * width:  # This means the image is vertical
+        gs = gridspec.GridSpec(3, 1)
+        ax_indices = ((0, 0), (1, 0), (2, 0))
+        legend_settings = {"bbox_to_anchor": (1.05, 0.5), "loc": "center left"}
+    else:  # This means the image is horizontal (default)
+        gs = gridspec.GridSpec(1, 3)
+        ax_indices = ((0, 0), (0, 1), (0, 2))
+        legend_settings = {"bbox_to_anchor": (0.5, -0.23), "loc": "lower center"}
+
+    return gs, ax_indices, legend_settings
+
+
+def plot_sar_detection(
     im_ms: np.ndarray,
     im_labels: np.ndarray,
     sl_pix: np.ndarray,
@@ -114,6 +212,7 @@ def _plot_sar_detection(
     im_ref_buffer: Optional[np.ndarray],
     output_path: str,
     settings: Dict[str, Any],
+    shoreline_extraction_area: List[np.ndarray],
 ) -> bool:
     """
     Plots SAR detection results including grayscale image, shoreline pixels,
@@ -128,6 +227,7 @@ def _plot_sar_detection(
         im_ref_buffer (Optional[np.ndarray]): Boolean mask of the reference shoreline buffer.
         output_path (str): Directory path to save the figure if enabled.
         settings (Dict[str, Any]): Dictionary of settings. Must contain key 'save_figure'.
+        shoreline_extraction_area (list[np.ndarray]): The shoreline extraction area in pixel coordinates.
 
     Returns:
         bool: Always returns False. Used as a placeholder return value.
@@ -142,7 +242,14 @@ def _plot_sar_detection(
         mask = np.ma.masked_where(im_ref_buffer == False, im_ref_buffer)
         ax1.imshow(mask, cmap="PiYG", alpha=0.6)
     ax1.plot(sl_pix[:, 0], sl_pix[:, 1], "r.", markersize=1)
-    ax1.set_title(date, fontweight="bold", fontsize=14)
+    for area in shoreline_extraction_area:
+        ax1.plot(
+            area[:, 0],
+            area[:, 1],
+            color="#cb42f5",
+            markersize=1,
+        )
+    ax1.set_title(date)
     ax1.axis("off")
 
     # Right panel
@@ -155,22 +262,36 @@ def _plot_sar_detection(
             np.ma.masked_where(~im_ref_buffer, im_ref_buffer), cmap="PiYG", alpha=0.5
         )
     ax2.plot(sl_pix[:, 0], sl_pix[:, 1], "r.", markersize=1)
-    ax2.set_title(satname, fontweight="bold", fontsize=14)
+    for area in shoreline_extraction_area:
+        ax2.plot(
+            area[:, 0],
+            area[:, 1],
+            color="#cb42f5",
+            markersize=1,
+        )
+    ax2.set_title(satname)
     ax2.axis("off")
 
     # Add extra space between plots and place legend fully outside
     plt.subplots_adjust(left=0.05, right=0.95, wspace=0.2)
 
     # Legend placed in figure coordinates outside the plot area
+    handles = [
+        mlines.Line2D([], [], color="red", label="Shoreline"),
+        mpatches.Patch(color="red", alpha=0.4, label="Reference shoreline buffer"),
+        mpatches.Patch(color="yellow", label="Otsu class 1"),
+        mpatches.Patch(color="blue", label="Otsu class 2"),
+    ]
+
+    if shoreline_extraction_area:
+        handles.append(
+            mlines.Line2D([], [], color="#cb42f5", label="shoreline extraction area")
+        )
+
     fig.legend(
-        handles=[
-            mlines.Line2D([], [], color="red", label="Shoreline"),
-            mpatches.Patch(color="red", alpha=0.4, label="Reference shoreline buffer"),
-            mpatches.Patch(color="yellow", label="Otsu class 1"),
-            mpatches.Patch(color="blue", label="Otsu class 2"),
-        ],
+        handles=handles,
         loc="center left",
-        bbox_to_anchor=(0.44, 0.5),  # Pull it further left to ensure whitespace
+        bbox_to_anchor=(0.44, 0.5),
         fontsize=9,
         frameon=True,
     )
@@ -186,7 +307,7 @@ def _plot_sar_detection(
     return False
 
 
-def _plot_optical_detection(
+def plot_optical_detection(
     im_ms: np.ndarray,
     im_labels: np.ndarray,
     cloud_mask: np.ndarray,
@@ -196,8 +317,8 @@ def _plot_optical_detection(
     im_ref_buffer: Optional[np.ndarray],
     output_path: str,
     settings: Dict[str, Any],
-    shoreline_extraction_area: Optional[np.ndarray],
     sitename: str,
+    shoreline_extraction_area: Optional[np.ndarray],
 ) -> bool:
     """
     Plots optical shoreline detection including RGB composite, classified output,
@@ -213,9 +334,8 @@ def _plot_optical_detection(
         im_ref_buffer (Optional[np.ndarray]): Boolean mask for reference shoreline buffer.
         output_path (str): Directory to save the output image.
         settings (Dict[str, Any]): Settings dictionary, should include 'save_figure' flag.
-        shoreline_extraction_area (Optional[np.ndarray]): Optional mask indicating area of shoreline extraction.
         sitename (str): Name of the site (for display in title).
-
+        shoreline_extraction_area (list[np.ndarry]): The shoreline extraction area in pixel coordinates.
     Returns:
         bool: `True` if the image was skipped by user input; otherwise `False`.
     """
@@ -229,6 +349,13 @@ def _plot_optical_detection(
     im_class = _get_im_class(im_labels, im_rgb)
     ax1.imshow(np.nan_to_num(im_rgb))
     ax1.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
+    for area in shoreline_extraction_area:
+        ax1.plot(
+            area[:, 0],
+            area[:, 1],
+            color="#cb42f5",
+            markersize=1,
+        )
     ax1.set_title(sitename, fontweight="bold", fontsize=16)
     ax1.axis("off")
 
@@ -242,6 +369,13 @@ def _plot_optical_detection(
         mask = np.ma.masked_where(im_ref_buffer == False, im_ref_buffer)
         ax2.imshow(mask, cmap="PiYG", alpha=0.6)
     ax2.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
+    for area in shoreline_extraction_area:
+        ax2.plot(
+            area[:, 0],
+            area[:, 1],
+            color="#cb42f5",
+            markersize=1,
+        )
     ax2.set_title(date, fontweight="bold", fontsize=16)
     ax2.axis("off")
 
@@ -254,6 +388,13 @@ def _plot_optical_detection(
             np.ma.masked_where(~im_ref_buffer, im_ref_buffer), cmap="PiYG", alpha=0.6
         )
     ax3.plot(sl_pix[:, 0], sl_pix[:, 1], "k.", markersize=1)
+    for area in shoreline_extraction_area:
+        ax3.plot(
+            area[:, 0],
+            area[:, 1],
+            color="#cb42f5",
+            markersize=1,
+        )
     ax3.set_title(satname, fontweight="bold", fontsize=16)
     ax3.axis("off")
 
