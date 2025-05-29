@@ -574,15 +574,25 @@ def get_tier1_images(inputs, polygon, dates, scene_cloud_cover, months_list):
         "S2": "COPERNICUS/S2_HARMONIZED",
         "S1": "COPERNICUS/S1_GRD",
     }
+
+    default_sentinel_1_properties = {
+        "transmitterReceiverPolarisation": ["VH"],
+        "instrumentMode": "IW",
+    }
+
     im_dict_T1 = dict([])
     polar = None
     for satname in inputs["sat_list"]:
         im_dict_T1[satname] = []
         if satname == "S1":
-            if inputs.get("sentinel_1_properties"):
-                transmitters = inputs["sentinel_1_properties"][
-                    "transmitterReceiverPolarisation"
-                ]
+            # If the satellite is Sentinel-1, and no polarization is specified, use the default properties
+            sentinel_1_properties = inputs.get(
+                "sentinel_1_properties", default_sentinel_1_properties
+            )
+            if sentinel_1_properties:
+                transmitters = sentinel_1_properties.get(
+                    "transmitterReceiverPolarisation", ["VH"]
+                )
                 # for each transmitter get the images
                 for polar in transmitters:
                     if polar not in ["VV", "VH", "HH", "HV"]:
