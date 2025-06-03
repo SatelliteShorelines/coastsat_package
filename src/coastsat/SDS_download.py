@@ -939,6 +939,8 @@ def get_image_quality(satname: str, im_meta: dict) -> str:
         L8, L9: Landsat 8 and Landsat 9
         S2: Sentinel-2
     """
+    default_quality = "PASSED"  # Default value if quality is not found
+
     # Mapping of satellite names to their respective quality keys
     quality_keys = {
         "L5": "IMAGE_QUALITY",
@@ -947,7 +949,7 @@ def get_image_quality(satname: str, im_meta: dict) -> str:
         "L9": "IMAGE_QUALITY_OLI",
     }
     if satname in quality_keys:
-        return im_meta["properties"].get(quality_keys[satname], "NA")
+        return im_meta["properties"].get(quality_keys[satname], default_quality)
     elif satname == "S2":
         # List of possible quality flag names for Sentinel-2
         flag_names = ["RADIOMETRIC_QUALITY", "RADIOMETRIC_QUALITY_FLAG"]
@@ -962,6 +964,8 @@ def get_image_quality(satname: str, im_meta: dict) -> str:
             + " and add your inputs in text (not a screenshot, please)."
         )
         return "PASSED"
+    else:
+        return default_quality  # Return default value for unknown satellites
 
 
 def get_georeference_accuracy(satname: str, im_meta: dict) -> str:
@@ -985,6 +989,7 @@ def get_georeference_accuracy(satname: str, im_meta: dict) -> str:
     Returns:
     str: The accuracy of the geometric reference.
     """
+    acc_georef = "PASSED"
     if satname in ["L5", "L7", "L8", "L9"]:
         # average georefencing error across Landsat collection (RMSE = 12m)
         acc_georef = im_meta["properties"].get("GEOMETRIC_RMSE_MODEL", 12)
@@ -1000,7 +1005,6 @@ def get_georeference_accuracy(satname: str, im_meta: dict) -> str:
                 return im_meta["properties"][flag]
         # if none fo the flags appeared then set the acc_georef to passed
         acc_georef = "PASSED"
-        # acc_georef = -1 # old value returned before update
     return acc_georef
 
 
@@ -2089,8 +2093,8 @@ def read_metadata_file(filepath: str) -> Dict[str, Union[str, int, float]]:
     default_keys = {
         "filename": "",
         "epsg": "",
-        "acc_georef": -1,
-        "im_quality": -1,
+        "acc_georef": -1,  # assuming default accuracy is 'PASSED'
+        "im_quality": "PASSED",  # assuming default quality is 'PASSED'
         "im_width": -1,
         "im_height": -1,
     }
@@ -2201,7 +2205,8 @@ def get_metadata(inputs):
     # initialize metadata dict
     metadata = dict([])
     # loop through the satellite missions that were specified in the inputs
-    satellite_list = inputs.get("sat_list", ["L5", "L7", "L8", "L9", "S2"])
+    satellite_list = inputs.get("sat_list", ["L5", "L7", "L8", "L9", "S2", "S1"])
+
     for satname in satellite_list:
         sat_path = os.path.join(filepath, satname)
         # if a folder has been created for the given satellite mission
