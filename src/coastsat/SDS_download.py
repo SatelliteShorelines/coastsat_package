@@ -1072,7 +1072,7 @@ def merge_image_tiers(inputs, im_dict_T1, im_dict_T2):
     return im_dict_T1
 
 
-def count_total_images(image_dict):
+def count_total_images(image_dict, tier=1):
     """
     Counts the total number of images available in a nested dictionary.
 
@@ -1118,7 +1118,10 @@ def count_total_images(image_dict):
         return total
 
     total_images = sum(recursive_count(subdict) for subdict in image_dict.values())
-    print("  Total images available to download from Tier 1: %d images" % total_images)
+    print(
+        f"  Total images available to download from Tier {tier}: %d images"
+        % total_images
+    )
     return total_images
 
 
@@ -1188,7 +1191,7 @@ def check_images_available(
         )
         im_dict_T1 = remove_existing_images_if_needed(inputs, im_dict_T1)
 
-    count_total_images(im_dict_T1)
+    count_total_images(im_dict_T1, tier=1)
 
     # S2 does not have a tier 2 collection so if it was the only satellite requested, return
     if len(inputs["sat_list"]) == 1 and inputs["sat_list"][0] == "S2":
@@ -1200,7 +1203,7 @@ def check_images_available(
         )
         im_dict_T2 = remove_existing_images_if_needed(inputs, im_dict_T2)
 
-    count_total_images(im_dict_T2)
+    count_total_images(im_dict_T2, tier=2)
 
     return im_dict_T1, im_dict_T2
 
@@ -1237,6 +1240,28 @@ def save_sar_jpg(tif, filepath):
     imageio.imwrite(filepath, im_S1_uint8, quality=100)
 
 
+def download_S1_image(image_ee, polygon, polarization, save_path):
+    # Get region and download
+    proj = image_ee.select(polarization).projection()
+    region = adjust_polygon(polygon, proj)
+    return download_tif(image_ee, region, polarization, save_path, "S1")
+
+
+def rename_image_file(
+    default_path, im_date, sitename, polar, suffix, save_dir, all_names
+):
+    filename = get_file_name(im_date, "S1", sitename, polar, suffix, all_names)
+    new_filepath = os.path.join(save_dir, filename)
+
+    if os.path.exists(new_filepath):
+        os.remove(new_filepath)
+
+    os.rename(default_path, new_filepath)
+    all_names.append(filename)
+
+    return filename, new_filepath
+
+
 def process_sentinel1_image(
     image_ee,
     im_meta,
@@ -1246,6 +1271,7 @@ def process_sentinel1_image(
     suffix,
     all_names,
     logger,
+    default_sentinel_1_properties=None,
 ):
     """
     Processes a single Sentinel-1 image: downloads, renames, and saves metadata.
@@ -1254,10 +1280,24 @@ def process_sentinel1_image(
         dict: Contains 'skip_image' (always False here), 'filename_ms', 'im_fn'
     """
     try:
-        # Get the list of polarizations (default to ['VH'] if not provided)
-        polarizations = inputs["sentinel_1_properties"].get(
-            "transmitterReceiverPolarisation", ["VH"]
-        )
+        if not default_sentinel_1_properties:
+            default_sentinel_1_properties = {
+                "transmitterReceiverPolarisation": ["VH"],
+                "instrumentMode": "IW",
+            }
+
+        # Get the user-provided properties if they exist, otherwise an empty dict
+        user_properties = inputs.get("sentinel_1_properties", {})
+        if not user_properties:
+            logger.warning(
+                "No user-defined Sentinel-1 properties provided. Using default values."
+            )
+
+        # Merge with defaults — user values override defaults if present
+        merged_properties = {**default_sentinel_1_properties, **user_properties}
+
+        # Now you can safely access the values
+        polarizations = merged_properties["transmitterReceiverPolarisation"]
         polar = polarizations[0]  # Use the first polarization for now
 
         # for each polarization in the list of polarizations load the band
@@ -1273,13 +1313,8 @@ def process_sentinel1_image(
 
         im_epsg = int(band["crs"][5:])
         fp = filepaths[1]  # Where to save the .tif
-        # im_date = process_image_metadata(im_meta)@ todo remove these 2 lines
-        # image_ee = ee.Image(im_meta["id"])
 
-        # Get region and download
-        proj = image_ee.select(polar).projection()
-        ee_region = adjust_polygon(inputs["polygon"], proj)
-        default_tif = download_tif(image_ee, ee_region, polar, fp, "S1")
+        default_tif_path = download_S1_image(image_ee, inputs["polygon"], polar, fp)
 
         # Create safe filename
         filename = get_file_name(
@@ -1288,7 +1323,7 @@ def process_sentinel1_image(
         new_filepath = os.path.join(fp, filename)
         if os.path.exists(new_filepath):
             os.remove(new_filepath)  # Remove the existing file before renaming
-        os.rename(default_tif, new_filepath)
+        os.rename(default_tif_path, new_filepath)
 
         all_names.append(filename)
 
@@ -2278,6 +2313,7 @@ def remove_existing_imagery(
             print(
                 f"{satname}:There are {len(avail_date_list)} images available, 0 images already exist, {len(avail_date_list)} to download"
             )
+        # If the satellite name exists in the dictionary of already downloaded images
         if satname in metadata and metadata[satname]["dates"]:
             avail_date_list = [
                 datetime.fromtimestamp(
