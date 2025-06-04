@@ -1177,7 +1177,6 @@ def save_sar_image(
     im_uint8 = img_as_ubyte(im_rescaled)
 
     rgb_dir = os.path.join(root_dir, "RGB")
-    print(f"Saving SAR image to {rgb_dir}")
     os.makedirs(rgb_dir, exist_ok=True)
 
     filename = f"{date}_RGB_{satname}.jpg"
