@@ -435,7 +435,23 @@ def debug_kill_wifi():
     os.system("netsh wlan disconnect")
 
 
-def get_images_list_from_collection(ee_col, polygon, dates):
+def _normalize_dates(dates: list) -> tuple[str, str]:
+    """Ensure dates are in string format."""
+    start, end = dates
+    if isinstance(start, datetime):
+        start = start.strftime("%Y-%m-%d")
+    if isinstance(end, datetime):
+        end = end.strftime("%Y-%m-%d")
+    return start, end
+
+
+def get_images_list_from_collection(
+    ee_col: ee.ImageCollection,
+    polygon: list,
+    dates: list,
+    min_coverage: float = 0.50,
+    **kwargs,
+) -> list:
     """
     Retrieves a list of images from a given Earth Engine collection within a specified polygon and date range.
     Splits the collection if it exceeds the maximum size of 5000 images.
@@ -444,6 +460,12 @@ def get_images_list_from_collection(ee_col, polygon, dates):
         ee_col (ee.ImageCollection): The Earth Engine collection to retrieve images from.
         polygon (list): The coordinates of the polygon as a list of [longitude, latitude] pairs.
         dates (list): The start and end dates of the date range as a list of strings in the format "YYYY-MM-DD".
+        min_coverage (float): Minimum required fraction of the polygon area that must be covered by an image.
+        **kwargs: Additional keyword arguments to pass to the filtering function.
+            min_coverage (float): Minimum required fraction of the polygon area that must be covered by an image.
+            tol (float): The error tolerance (in meters) for area and intersection calculations.
+        Raises:
+            ValueError: If the number of splits is greater than the range of days available.
 
     Returns:
         list: A list of images in the collection that satisfy the given polygon and date range.
@@ -451,7 +473,14 @@ def get_images_list_from_collection(ee_col, polygon, dates):
     col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(
         dates[0], dates[1]
     )
+    col = filter_collection_by_coverage(
+        col, ee.Geometry.Polygon(polygon), min_coverage=min_coverage, **kwargs
+    )
+
     col_size = col.size().getInfo()
+
+    if col_size <= 4999:
+        return col.getInfo().get("features")  # this is im_list
 
     im_list = []
     # the max size of the collection is 5000, so we need to split the collection if it is larger
@@ -461,7 +490,7 @@ def get_images_list_from_collection(ee_col, polygon, dates):
         while True:
             sub_col_sizes = []
             for start_date, end_date in split_ranges:
-                sub_col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(
+                sub_col = col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(
                     start_date, end_date
                 )
                 sub_col_size = sub_col.size().getInfo()
@@ -477,8 +506,7 @@ def get_images_list_from_collection(ee_col, polygon, dates):
                 start_date, end_date
             )
             im_list.extend(sub_col.getInfo().get("features"))
-    else:
-        im_list = col.getInfo().get("features")
+
     return im_list
 
 
@@ -533,6 +561,40 @@ def split_date_range(start_date, end_date, num_splits):
     return split_ranges
 
 
+def create_polarization_filter(polarizations):
+    """
+    Creates an Earth Engine filter for the specified polarizations.
+
+    Args:
+        polarizations: str or list of str
+            Single polarization (e.g., 'VV') or list of polarizations (e.g., ['VV', 'VH'])
+
+    Returns:
+        ee.Filter: Combined filter for the specified polarizations
+    """
+    # Convert single polarization to list if needed
+    if isinstance(polarizations, str):
+        polarizations = [polarizations]
+
+    # Validate polarizations
+    valid_pols = {"VV", "VH", "HH", "HV"}
+    invalid_pols = set(polarizations) - valid_pols
+    if invalid_pols:
+        raise ValueError(
+            f"Invalid polarizations: {invalid_pols}. "
+            f"Valid options are: {valid_pols}"
+        )
+
+    # Create individual filters
+    polar_filters = [
+        ee.Filter.listContains("transmitterReceiverPolarisation", p)
+        for p in polarizations
+    ]
+
+    # Combine filters with OR logic
+    return ee.Filter.Or(*polar_filters)
+
+
 def get_tier1_images(inputs, polygon, dates, scene_cloud_cover, months_list):
     """
     Retrieves Tier 1 images from Landsat and Sentinel collections based on the given inputs.
@@ -544,6 +606,7 @@ def get_tier1_images(inputs, polygon, dates, scene_cloud_cover, months_list):
             2. S2tile (str): Sentinel-2 tile name to filter the images.
             3. sentinel_1_properties (dict): Properties for Sentinel-1 images, including polarization and instrument mode.
             4. landsat_collection (str): Landsat collection name, default is 'C02'.
+            5. min_coverage (float): Minimum coverage percentage for the images, default is 0.50.
         polygon (str): The polygon representing the area of interest.
         dates (list): A list of dates to filter the images.
         scene_cloud_cover (float): The maximum cloud cover percentage allowed for the images.
@@ -581,7 +644,6 @@ def get_tier1_images(inputs, polygon, dates, scene_cloud_cover, months_list):
     }
 
     im_dict_T1 = dict([])
-    polar = None
     for satname in inputs["sat_list"]:
         im_dict_T1[satname] = []
         if satname == "S1":
@@ -589,28 +651,24 @@ def get_tier1_images(inputs, polygon, dates, scene_cloud_cover, months_list):
             sentinel_1_properties = inputs.get(
                 "sentinel_1_properties", default_sentinel_1_properties
             )
-            if sentinel_1_properties:
-                transmitters = sentinel_1_properties.get(
-                    "transmitterReceiverPolarisation", ["VH"]
+            polarizations = sentinel_1_properties.get(
+                "transmitterReceiverPolarisation", ["VH"]
+            )
+            # for each transmitter get the images
+            for polar in polarizations:
+                im_list = get_image_info(
+                    col_names_T1[satname],
+                    satname,
+                    polygon,
+                    dates,
+                    S2tile=inputs.get("S2tile", ""),
+                    scene_cloud_cover=scene_cloud_cover,
+                    months_list=months_list,
+                    polar=polar,
+                    min_coverage=inputs.get("min_coverage", 0.50),
                 )
-                # for each transmitter get the images
-                for polar in transmitters:
-                    if polar not in ["VV", "VH", "HH", "HV"]:
-                        raise ValueError(
-                            f"Invalid polarization '{polar}'. Expected one of ['VV', 'VH', 'HH', 'HV']."
-                        )
-                    im_list = get_image_info(
-                        col_names_T1[satname],
-                        satname,
-                        polygon,
-                        dates,
-                        S2tile=inputs.get("S2tile", ""),
-                        scene_cloud_cover=scene_cloud_cover,
-                        months_list=months_list,
-                        polar=polar,
-                    )
-                    im_dict_T1[satname].extend(im_list)
-                    print(f"     {satname} {polar}: {len(im_list)} images")
+                im_dict_T1[satname].extend(im_list)
+                print(f"     {satname} {polar}: {len(im_list)} images")
         else:
             # get the list of images available for the particular satellite at the location given by the polygon and the dates
             im_list = get_image_info(
@@ -621,7 +679,8 @@ def get_tier1_images(inputs, polygon, dates, scene_cloud_cover, months_list):
                 S2tile=inputs.get("S2tile", ""),
                 scene_cloud_cover=scene_cloud_cover,
                 months_list=months_list,
-                polar=polar,
+                polar=None,
+                min_coverage=inputs.get("min_coverage", 0.50),
             )
 
             if satname == "S2":
@@ -656,6 +715,11 @@ def get_tier2_images(inputs, polygon, dates_str, scene_cloud_cover, months_list)
 
     Args:
         inputs (dict): A dictionary containing input parameters.
+            1. sat_list (list): List of satellite names to filter the images. Eg. ['L5', 'L7', 'L8', 'L9', 'S2', 'S1']
+            2. S2tile (str): Sentinel-2 tile name to filter the images.
+            3. sentinel_1_properties (dict): Properties for Sentinel-1 images, including polarization and instrument mode.
+            4. landsat_collection (str): Landsat collection name, default is 'C02'.
+            5. min_coverage (float): Minimum coverage percentage for the images, default is 0.50.
         polygon (str): The polygon coordinates of the area of interest.
         dates_str (str): A string representing the dates of interest.
         scene_cloud_cover (float): The maximum allowable cloud cover for the scenes.
@@ -663,6 +727,20 @@ def get_tier2_images(inputs, polygon, dates_str, scene_cloud_cover, months_list)
 
     Returns:
         dict: A dictionary containing the retrieved Tier 2 images for each Landsat satellite.
+        Example:
+            {
+                'L5': [image1, image2, ...],
+                'L7': [image1, image2, ...],
+                'L8': [image1, image2, ...],
+                'L9': [image1, image2, ...],
+                'S2': [image1, image2, ...],
+                'S1': {
+                    'VH': [image1, image2, ...],
+                    'HH': [image1, image2, ...]
+
+                }
+
+
     """
     print("- In Landsat Tier 2 (not suitable for time-series analysis):", end="\n")
     col_names_T2 = {
@@ -682,6 +760,7 @@ def get_tier2_images(inputs, polygon, dates_str, scene_cloud_cover, months_list)
             S2tile=inputs.get("S2tile", ""),
             scene_cloud_cover=scene_cloud_cover,
             months_list=months_list,
+            min_coverage=inputs.get("min_coverage", 0.50),
         )
         print("     %s: %d images" % (satname, len(im_list)))
         im_dict_T2[satname] = im_list
@@ -812,9 +891,60 @@ def filter_images_by_month(im_list, satname, months_list, **kwargs):
     return im_list_upt
 
 
+def filter_collection_by_coverage(
+    collection: ee.collection,
+    polygon: ee.Geometry,
+    min_coverage=0.5,
+    tol: float = 1000,
+    **kwargs,
+) -> ee.collection:
+    """
+    Filters an Earth Engine image collection to retain only images that sufficiently cover a given polygon.
+    This function calculates the fraction of the polygon's area covered by each image's footprint and filters out images that do not meet the specified minimum coverage threshold. Additional properties, such as the coverage fraction, image footprint, and overlap geometry, are added to each image.
+    Args:
+        collection (ee.collection): The Earth Engine image collection to filter.
+        polygon (ee.Geometry): The polygon geometry to assess coverage against.(Note this is the ROI)
+        min_coverage (float, optional): Minimum required fraction (0-1) of the polygon area that must be covered by an image. Defaults to 0.5.
+        tol (float, optional): The error tolerance (in meters) for area and intersection calculations. Defaults to 1000.
+    Returns:
+        ee.collection: The image collection filtered to only include images that covered at least min_coverage of the polygon, with each image annotated with coverage information.
+    """
+    # Assume that filtering by date and polygon coverage has already occured
+
+    polygon_area = polygon.area(tol)
+
+    def add_coverage_fraction(img: ee.Image):
+        footprint = img.geometry()
+        overlap = footprint.intersection(polygon, tol)
+        overlap_area = overlap.area(tol)
+        coverage_frac = overlap_area.divide(polygon_area)
+        return img.set(
+            {
+                "coverage_frac": coverage_frac,
+                "footprint_geom": footprint,
+                "overlap_geom": overlap,
+            }
+        )
+
+    # Add new properties to each image in the collection
+    with_coverage = collection.map(add_coverage_fraction)
+    # Filter out any images in the collection that did not not cover at least min_coverage of the polygon
+    # Note this is to prevent us from downloading teeny tiny clips
+    filtered_collection = with_coverage.filter(
+        ee.Filter.gte("coverage_frac", min_coverage)
+    )
+    return filtered_collection
+
+
 @retry  # Apply the retry decorator to the function
 def get_image_info(
-    collection, satname, polygon, dates, scene_cloud_cover: float = 0.95, **kwargs
+    collection,
+    satname,
+    polygon,
+    dates,
+    scene_cloud_cover: float = 0.95,
+    min_coverage: float = 0.5,
+    **kwargs,
 ):
     """
     Reads info about EE images for the specified collection, satellite, and dates
@@ -832,6 +962,8 @@ def get_image_info(
         start and end dates (e.g. '2022-01-01')
     scene_cloud_cover: float (default: 0.95)
         maximum cloud cover percentage for the scene (not just the ROI)
+    min_coverage: float (default: 0.5)
+        minimum required fraction of the polygon area that must be covered by an image
     kwargs: dict
         additional arguments to pass to the function (e.g. S2tile, polar)
         polar: list of polarizations to filter by (e.g. ['HH', 'VH'])
@@ -842,43 +974,30 @@ def get_image_info(
     im_list: list of ee.Image objects
         list with the info for the images
     """
-    start_date, end_date = dates
-    # Convert to strings if necessary
-    if isinstance(start_date, datetime):
-        start_date = start_date.strftime("%Y-%m-%d")
-    if isinstance(end_date, datetime):
-        end_date = end_date.strftime("%Y-%m-%d")
+    start_date, end_date = _normalize_dates(dates)
 
     # get info about images
     ee_col = ee.ImageCollection(collection)
     # Initialize the collection with filterBounds and filterDate
-    col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(
-        dates[0], dates[1]
+    ee_col = ee_col.filterBounds(ee.Geometry.Polygon(polygon)).filterDate(
+        start_date, end_date
     )
 
     # If "polar" is included it contains a list of polarizations to filter by. Example: ['HH', 'VH']
     if kwargs.get("polar"):
-        # Create a filter that matches any of the specified polarizations
-        polar_filters = [
-            ee.Filter.listContains("transmitterReceiverPolarisation", p)
-            for p in kwargs["polar"]
-        ]
-        combined_filter = ee.Filter.Or(*polar_filters)
-
-        # Apply the combined filter to the image collection
-        col_trans = col.filter(combined_filter)
-
-        # Get the list of filtered images
-        im_list = col_trans.getInfo().get("features")
+        polar_filter = create_polarization_filter(kwargs["polar"])
+        ee_col = ee_col.filter(polar_filter)
 
     # If "S2tile" key is in kwargs and its associated value is truthy (not an empty string, None, etc.),
     # then apply an additional filter to the collection.
     if kwargs.get("S2tile"):
-        col = col.filterMetadata("MGRS_TILE", "equals", kwargs["S2tile"])  # 58GGP
+        ee_col = ee_col.filterMetadata("MGRS_TILE", "equals", kwargs["S2tile"])  # 58GGP
         print(f"Only keeping user-defined S2tile: {kwargs['S2tile']}")
 
     # This splits the im_list to avoid the 5000 image limit by making multiple orders within the list
-    im_list = get_images_list_from_collection(ee_col, polygon, dates)
+    im_list = get_images_list_from_collection(
+        ee_col, polygon, dates, min_coverage=min_coverage
+    )
 
     # remove very cloudy images (>95% cloud cover)
     im_list = remove_cloudy_images(
@@ -906,6 +1025,18 @@ def get_image_info(
         ),
     )
     return im_list
+
+
+def _filter_by_polarization(
+    collection: ee.ImageCollection, polarizations: list
+) -> ee.ImageCollection:
+    """Filters a collection by SAR polarizations."""
+    filters = [
+        ee.Filter.listContains("transmitterReceiverPolarisation", p)
+        for p in polarizations
+    ]
+    combined_filter = ee.Filter.Or(*filters)
+    return collection.filter(combined_filter)
 
 
 @retry
@@ -1130,14 +1261,13 @@ def count_total_images(image_dict, tier=1):
 
 
 def check_images_available(
-    inputs,
-    months_list=None,
-    scene_cloud_cover=0.95,
-    tier1=True,
-    tier2=False,
-    project="",
-    initialize_ee=True,
-):
+    inputs: dict,
+    months_list: list[int] = None,
+    scene_cloud_cover: float = 0.95,
+    tier1: bool = True,
+    tier2: bool = False,
+    **kwargs,
+) -> tuple[list[dict], list[dict]]:
     """
     Scan the GEE collections to see how many images are available for each
     satellite mission (L5,L7,L8,L9,S2,S1), collection (C02) and tier (T1,T2).
@@ -1159,13 +1289,27 @@ def check_images_available(
     scene_cloud_cover: int
         maximum cloud cover percentage for the scene (default is 95)
         Note: this is the entire scene not just the ROI
+    tier1: bool
+        whether to include Tier 1 images (default is True)
+    tier2: bool
+        whether to include Tier 2 images (default is False)
+    kwargs: dict
+        additional arguments to pass to the function (e.g. S2tile, polar)
+        polar: list of polarizations to filter by (e.g. ['HH', 'VH'])
+        S2tile: Sentinel-2 tile name to filter the images (e.g. '58GGP')
 
     Returns:
     -----------
-    im_dict_T1: list of dict
-        list of images in Tier 1 and Level-1C
-    im_dict_T2: list of dict
-        list of images in Tier 2 (Landsat only)
+    im_dict_T1: dict
+        dictionary with the info for the Tier 1 images
+        example: {'L5': [image1, image2, ...], 'L7': [image1, image2, ...], ...}
+    im_dict_T2: dict
+        dictionary with the info for the Tier 2 images
+        example: {'L5': [image1, image2, ...], 'L7': [image1, image2, ...], ...}
+
+    Raises:
+        Exception: If the Earth Engine API is not initialized.
+        Exception: If the dates in inputs["dates"] are not in chronological order.
     """
     if months_list is None:
         months_list = list(range(1, 13))
@@ -2052,24 +2196,12 @@ def retrieve_images(
                                 logger,
                             )
                     except Exception as e:
-                        # print(traceback.format_exc())
                         logger.error(
                             f"Could not save metadata for {im_meta.get('id','unknown')} that failed.\n{e}"
                         )
                         continue
-    # once all images have been downloaded, load metadata from .txt files
-    # metadata = get_metadata(inputs)
-    # metadata_s1 = get_metadata_s1(inputs)
     # combines all the metadata into a single dictionary and saves it to json
     metadata = get_metadata(inputs)
-    # get S1 metadata and save to json file
-
-    # save metadata dict
-    # metadata_json = os.path.join(im_folder, inputs["sitename"] + "_metadata" + ".json")
-    # SDS_preprocess.write_to_json(metadata_json, metadata)
-    # # save metadata dict for S1
-    # metadata_s1_json = os.path.join(im_folder, inputs["sitename"] + "_metadata_S1" + ".json")
-    # SDS_preprocess.write_to_json(metadata_s1_json, metadata_s1)
     print("Satellite images downloaded from GEE and save in %s" % im_folder)
     return metadata
 
@@ -2368,7 +2500,9 @@ def get_s2cloudless(image_list: list, inputs: dict):
         polygon = inputs["polygon"]
         collection_name = "COPERNICUS/S2_CLOUD_PROBABILITY"
         collection = ee.ImageCollection(collection_name)
-        cloud_images_list = get_images_list_from_collection(collection, polygon, dates)
+        cloud_images_list = get_images_list_from_collection(
+            collection, polygon, dates, min_coverage=inputs.get("min_coverage", 0.5)
+        )
         # Extract image IDs from the s2cloudless collection
         cloud_indices = [
             image["properties"]["system:index"] for image in cloud_images_list
