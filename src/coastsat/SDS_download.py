@@ -449,7 +449,7 @@ def get_images_list_from_collection(
     ee_col: ee.ImageCollection,
     polygon: list,
     dates: list,
-    min_coverage: float = 0.50,
+    min_coverage: float = 0.30,
     **kwargs,
 ) -> list:
     """
@@ -665,7 +665,7 @@ def get_tier1_images(inputs, polygon, dates, scene_cloud_cover, months_list):
                     scene_cloud_cover=scene_cloud_cover,
                     months_list=months_list,
                     polar=polar,
-                    min_coverage=inputs.get("min_coverage", 0.50),
+                    min_coverage=inputs.get("min_coverage", 0.30),
                 )
                 im_dict_T1[satname].extend(im_list)
                 print(f"     {satname} {polar}: {len(im_list)} images")
@@ -680,7 +680,7 @@ def get_tier1_images(inputs, polygon, dates, scene_cloud_cover, months_list):
                 scene_cloud_cover=scene_cloud_cover,
                 months_list=months_list,
                 polar=None,
-                min_coverage=inputs.get("min_coverage", 0.50),
+                min_coverage=inputs.get("min_coverage", 0.30),
             )
 
             if satname == "S2":
@@ -760,7 +760,7 @@ def get_tier2_images(inputs, polygon, dates_str, scene_cloud_cover, months_list)
             S2tile=inputs.get("S2tile", ""),
             scene_cloud_cover=scene_cloud_cover,
             months_list=months_list,
-            min_coverage=inputs.get("min_coverage", 0.50),
+            min_coverage=inputs.get("min_coverage", 0.30),
         )
         print("     %s: %d images" % (satname, len(im_list)))
         im_dict_T2[satname] = im_list
@@ -894,7 +894,7 @@ def filter_images_by_month(im_list, satname, months_list, **kwargs):
 def filter_collection_by_coverage(
     collection: ee.collection,
     polygon: ee.Geometry,
-    min_coverage=0.5,
+    min_coverage=0.3,
     tol: float = 1000,
     **kwargs,
 ) -> ee.collection:
@@ -904,7 +904,7 @@ def filter_collection_by_coverage(
     Args:
         collection (ee.collection): The Earth Engine image collection to filter.
         polygon (ee.Geometry): The polygon geometry to assess coverage against.(Note this is the ROI)
-        min_coverage (float, optional): Minimum required fraction (0-1) of the polygon area that must be covered by an image. Defaults to 0.5.
+        min_coverage (float, optional): Minimum required fraction (0-1) of the polygon area that must be covered by an image. Defaults to 0.3.
         tol (float, optional): The error tolerance (in meters) for area and intersection calculations. Defaults to 1000.
     Returns:
         ee.collection: The image collection filtered to only include images that covered at least min_coverage of the polygon, with each image annotated with coverage information.
@@ -943,7 +943,7 @@ def get_image_info(
     polygon,
     dates,
     scene_cloud_cover: float = 0.95,
-    min_coverage: float = 0.5,
+    min_coverage: float = 0.3,
     **kwargs,
 ):
     """
@@ -962,7 +962,7 @@ def get_image_info(
         start and end dates (e.g. '2022-01-01')
     scene_cloud_cover: float (default: 0.95)
         maximum cloud cover percentage for the scene (not just the ROI)
-    min_coverage: float (default: 0.5)
+    min_coverage: float (default: 0.3)
         minimum required fraction of the polygon area that must be covered by an image
     kwargs: dict
         additional arguments to pass to the function (e.g. S2tile, polar)
@@ -2501,7 +2501,7 @@ def get_s2cloudless(image_list: list, inputs: dict):
         collection_name = "COPERNICUS/S2_CLOUD_PROBABILITY"
         collection = ee.ImageCollection(collection_name)
         cloud_images_list = get_images_list_from_collection(
-            collection, polygon, dates, min_coverage=inputs.get("min_coverage", 0.5)
+            collection, polygon, dates, min_coverage=inputs.get("min_coverage", 0.3)
         )
         # Extract image IDs from the s2cloudless collection
         cloud_indices = [
