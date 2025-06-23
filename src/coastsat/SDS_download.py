@@ -449,7 +449,7 @@ def get_images_list_from_collection(
     ee_col: ee.ImageCollection,
     polygon: list,
     dates: list,
-    min_coverage: float = 0.30,
+    min_roi_coverage: float = 0.30,
     **kwargs,
 ) -> list:
     """
@@ -460,9 +460,9 @@ def get_images_list_from_collection(
         ee_col (ee.ImageCollection): The Earth Engine collection to retrieve images from.
         polygon (list): The coordinates of the polygon as a list of [longitude, latitude] pairs.
         dates (list): The start and end dates of the date range as a list of strings in the format "YYYY-MM-DD".
-        min_coverage (float): Minimum required fraction of the polygon area that must be covered by an image.
+        min_roi_coverage (float): Minimum required fraction of the polygon area that must be covered by an image.
         **kwargs: Additional keyword arguments to pass to the filtering function.
-            min_coverage (float): Minimum required fraction of the polygon area that must be covered by an image.
+            min_roi_coverage (float): Minimum required fraction of the polygon area that must be covered by an image.
             tol (float): The error tolerance (in meters) for area and intersection calculations.
         Raises:
             ValueError: If the number of splits is greater than the range of days available.
@@ -474,7 +474,7 @@ def get_images_list_from_collection(
         dates[0], dates[1]
     )
     col = filter_collection_by_coverage(
-        col, ee.Geometry.Polygon(polygon), min_coverage=min_coverage, **kwargs
+        col, ee.Geometry.Polygon(polygon), min_roi_coverage=min_roi_coverage, **kwargs
     )
 
     col_size = col.size().getInfo()
@@ -606,7 +606,7 @@ def get_tier1_images(inputs, polygon, dates, scene_cloud_cover, months_list):
             2. S2tile (str): Sentinel-2 tile name to filter the images.
             3. sentinel_1_properties (dict): Properties for Sentinel-1 images, including polarization and instrument mode.
             4. landsat_collection (str): Landsat collection name, default is 'C02'.
-            5. min_coverage (float): Minimum coverage percentage for the images, default is 0.50.
+            5. min_roi_coverage (float): Minimum coverage percentage for the images, default is 0.50.
         polygon (str): The polygon representing the area of interest.
         dates (list): A list of dates to filter the images.
         scene_cloud_cover (float): The maximum cloud cover percentage allowed for the images.
@@ -665,7 +665,7 @@ def get_tier1_images(inputs, polygon, dates, scene_cloud_cover, months_list):
                     scene_cloud_cover=scene_cloud_cover,
                     months_list=months_list,
                     polar=polar,
-                    min_coverage=inputs.get("min_coverage", 0.30),
+                    min_roi_coverage=inputs.get("min_roi_coverage", 0.30),
                 )
                 im_dict_T1[satname].extend(im_list)
                 print(f"     {satname} {polar}: {len(im_list)} images")
@@ -680,7 +680,7 @@ def get_tier1_images(inputs, polygon, dates, scene_cloud_cover, months_list):
                 scene_cloud_cover=scene_cloud_cover,
                 months_list=months_list,
                 polar=None,
-                min_coverage=inputs.get("min_coverage", 0.30),
+                min_roi_coverage=inputs.get("min_roi_coverage", 0.30),
             )
 
             if satname == "S2":
@@ -719,7 +719,7 @@ def get_tier2_images(inputs, polygon, dates_str, scene_cloud_cover, months_list)
             2. S2tile (str): Sentinel-2 tile name to filter the images.
             3. sentinel_1_properties (dict): Properties for Sentinel-1 images, including polarization and instrument mode.
             4. landsat_collection (str): Landsat collection name, default is 'C02'.
-            5. min_coverage (float): Minimum coverage percentage for the images, default is 0.50.
+            5. min_roi_coverage (float): Minimum coverage percentage for the images, default is 0.50.
         polygon (str): The polygon coordinates of the area of interest.
         dates_str (str): A string representing the dates of interest.
         scene_cloud_cover (float): The maximum allowable cloud cover for the scenes.
@@ -760,7 +760,7 @@ def get_tier2_images(inputs, polygon, dates_str, scene_cloud_cover, months_list)
             S2tile=inputs.get("S2tile", ""),
             scene_cloud_cover=scene_cloud_cover,
             months_list=months_list,
-            min_coverage=inputs.get("min_coverage", 0.30),
+            min_roi_coverage=inputs.get("min_roi_coverage", 0.30),
         )
         print("     %s: %d images" % (satname, len(im_list)))
         im_dict_T2[satname] = im_list
@@ -894,7 +894,7 @@ def filter_images_by_month(im_list, satname, months_list, **kwargs):
 def filter_collection_by_coverage(
     collection: ee.collection,
     polygon: ee.Geometry,
-    min_coverage=0.3,
+    min_roi_coverage=0.3,
     tol: float = 1000,
     **kwargs,
 ) -> ee.collection:
@@ -904,10 +904,10 @@ def filter_collection_by_coverage(
     Args:
         collection (ee.collection): The Earth Engine image collection to filter.
         polygon (ee.Geometry): The polygon geometry to assess coverage against.(Note this is the ROI)
-        min_coverage (float, optional): Minimum required fraction (0-1) of the polygon area that must be covered by an image. Defaults to 0.3.
+        min_roi_coverage (float, optional): Minimum required fraction (0-1) of the polygon area that must be covered by an image. Defaults to 0.3.
         tol (float, optional): The error tolerance (in meters) for area and intersection calculations. Defaults to 1000.
     Returns:
-        ee.collection: The image collection filtered to only include images that covered at least min_coverage of the polygon, with each image annotated with coverage information.
+        ee.collection: The image collection filtered to only include images that covered at least min_roi_coverage of the polygon, with each image annotated with coverage information.
     """
     # Assume that filtering by date and polygon coverage has already occured
 
@@ -928,10 +928,10 @@ def filter_collection_by_coverage(
 
     # Add new properties to each image in the collection
     with_coverage = collection.map(add_coverage_fraction)
-    # Filter out any images in the collection that did not not cover at least min_coverage of the polygon
+    # Filter out any images in the collection that did not not cover at least min_roi_coverage of the polygon
     # Note this is to prevent us from downloading teeny tiny clips
     filtered_collection = with_coverage.filter(
-        ee.Filter.gte("coverage_frac", min_coverage)
+        ee.Filter.gte("coverage_frac", min_roi_coverage)
     )
     return filtered_collection
 
@@ -943,7 +943,7 @@ def get_image_info(
     polygon,
     dates,
     scene_cloud_cover: float = 0.95,
-    min_coverage: float = 0.3,
+    min_roi_coverage: float = 0.3,
     **kwargs,
 ):
     """
@@ -962,7 +962,7 @@ def get_image_info(
         start and end dates (e.g. '2022-01-01')
     scene_cloud_cover: float (default: 0.95)
         maximum cloud cover percentage for the scene (not just the ROI)
-    min_coverage: float (default: 0.3)
+    min_roi_coverage: float (default: 0.3)
         minimum required fraction of the polygon area that must be covered by an image
     kwargs: dict
         additional arguments to pass to the function (e.g. S2tile, polar)
@@ -996,7 +996,7 @@ def get_image_info(
 
     # This splits the im_list to avoid the 5000 image limit by making multiple orders within the list
     im_list = get_images_list_from_collection(
-        ee_col, polygon, dates, min_coverage=min_coverage
+        ee_col, polygon, dates, min_roi_coverage=min_roi_coverage
     )
 
     # remove very cloudy images (>95% cloud cover)
@@ -2501,7 +2501,10 @@ def get_s2cloudless(image_list: list, inputs: dict):
         collection_name = "COPERNICUS/S2_CLOUD_PROBABILITY"
         collection = ee.ImageCollection(collection_name)
         cloud_images_list = get_images_list_from_collection(
-            collection, polygon, dates, min_coverage=inputs.get("min_coverage", 0.3)
+            collection,
+            polygon,
+            dates,
+            min_roi_coverage=inputs.get("min_coverage", 0.3),
         )
         # Extract image IDs from the s2cloudless collection
         cloud_indices = [
