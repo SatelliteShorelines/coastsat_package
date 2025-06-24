@@ -1266,6 +1266,7 @@ def check_images_available(
     scene_cloud_cover: float = 0.95,
     tier1: bool = True,
     tier2: bool = False,
+    min_roi_coverage: float = 0.3,
     **kwargs,
 ) -> tuple[list[dict], list[dict]]:
     """
@@ -1293,6 +1294,8 @@ def check_images_available(
         whether to include Tier 1 images (default is True)
     tier2: bool
         whether to include Tier 2 images (default is False)
+    min_roi_coverage: float
+        minimum required fraction of the ROI area that must be covered by an image (default is 0.3)
     kwargs: dict
         additional arguments to pass to the function (e.g. S2tile, polar)
         polar: list of polarizations to filter by (e.g. ['HH', 'VH'])
@@ -1317,6 +1320,9 @@ def check_images_available(
     dates = [datetime.strptime(_, "%Y-%m-%d") for _ in inputs["dates"]]
     dates_str = inputs["dates"]
     polygon = inputs["polygon"]
+
+    # add min_roi_coverage to inputs dictionary so that used in get_tier2_images and get_tier1_images
+    inputs["min_roi_coverage"] = min_roi_coverage
 
     im_dict_T2 = {}
     im_dict_T1 = {}
@@ -1517,6 +1523,7 @@ def retrieve_images(
     months_list: list = None,
     max_cloud_no_data_cover=0.95,
     scene_cloud_cover=0.95,
+    min_roi_coverage: float = 0.3,
 ):
     """
     Downloads all images from Landsat 5, Landsat 7, Landsat 8, Landsat 9 and Sentinel-2
@@ -1568,7 +1575,8 @@ def retrieve_images(
         maximum cloud cover & no data combined percentage within the ROI for images to be kept, otherwise removed
     scene_cloud_cover: float (default: 0.95)
         maximum cloud cover percentage for the scene (not just the ROI)
-
+    min_roi_coverage: float (default: 0.3)
+        The minimum percentage of the ROI that must be covered by the image.
     Returns:
     -----------
     metadata: dict
@@ -1587,6 +1595,9 @@ def retrieve_images(
         raise Exception(
             "Earth Engine API is not initialized. Please initialize it first with ee.Initialize(project=<project_id>)"
         )
+
+    # add the min_roi_coverage to the inputs dictionary
+    inputs["min_roi_coverage"] = min_roi_coverage
 
     # validates the inputs have references the correct collection (C02)
     inputs = validate_collection(inputs)
@@ -2480,7 +2491,10 @@ def remove_existing_imagery(
     return image_dict
 
 
-def get_s2cloudless(image_list: list, inputs: dict):
+def get_s2cloudless(
+    image_list: list,
+    inputs: dict,
+):
     """
     Match the list of Sentinel-2 (S2) images with the corresponding s2cloudless images.
 
@@ -2489,7 +2503,7 @@ def get_s2cloudless(image_list: list, inputs: dict):
     inputs (Dict[str, Union[str, List[str]]]): A dictionary containing:
         - 'dates': List of dates in 'YYYY-mm-dd' format as strings.
         - 'polygon': A list of coordinates defining the polygon of interest.
-
+        - 'min_roi_coverage': Minimum required coverage of the region of interest by the image (default is 0.3).
     Returns:
     List[Union[Dict, List]]: A list where each element is either a dictionary containing metadata of a matched
     s2cloudless image or an empty list if no match is found.
@@ -2504,7 +2518,7 @@ def get_s2cloudless(image_list: list, inputs: dict):
             collection,
             polygon,
             dates,
-            min_roi_coverage=inputs.get("min_coverage", 0.3),
+            min_roi_coverage=inputs.get("min_roi_coverage", 0.3),
         )
         # Extract image IDs from the s2cloudless collection
         cloud_indices = [
