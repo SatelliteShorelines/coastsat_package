@@ -1604,7 +1604,7 @@ def retrieve_images(
 
     # check image availabiliy and retrieve list of images
     im_dict_T1, im_dict_T2 = check_images_available(
-        inputs, months_list, scene_cloud_cover
+        inputs, months_list, scene_cloud_cover, min_roi_coverage=min_roi_coverage
     )
 
     # merge the two image collections tiers into a single dictionary
