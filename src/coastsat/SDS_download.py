@@ -1698,6 +1698,491 @@ def retrieve_images(
     return metadata
 
 
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Protocol, Any
+from abc import ABC, abstractmethod
+
+
+@dataclass
+class SatelliteConfig:
+    """Configuration for satellite-specific download parameters."""
+
+    name: str
+    bands: List[str]
+    qa_band: str
+    has_panchromatic: bool = False
+    has_swir: bool = False
+    pan_band: str = "B8"
+    swir_band: str = "B11"
+    cloudless_band: Optional[str] = None
+
+
+@dataclass
+class DownloadContext:
+    """Context object containing all download-related data."""
+
+    inputs: Dict[str, Any]
+    filepaths: List[str]
+    im_meta: Dict[str, Any]
+    im_date: str
+    im_epsg: int
+    accuracy_georef: str
+    image_quality: str
+    suffix: str
+    pbar: Any
+    logger: Any
+    cloud_mask_issue: bool
+    max_cloud_no_data_cover: float
+    cloud_threshold: float
+
+
+class DownloadStrategy(ABC):
+    """Abstract base class for satellite download strategies."""
+
+    @abstractmethod
+    def download(
+        self, context: DownloadContext, image_ee: Any, im_bands: List[Dict]
+    ) -> bool:
+        """Download the image for this satellite type. Returns True if image should be skipped."""
+        pass
+
+    @abstractmethod
+    def get_config(self) -> SatelliteConfig:
+        """Get the satellite configuration."""
+        pass
+
+
+class Landsat5DownloadStrategy(DownloadStrategy):
+    """Download strategy for Landsat 5."""
+
+    def get_config(self) -> SatelliteConfig:
+        return SatelliteConfig(
+            name="L5",
+            bands=["B1", "B2", "B3", "B4", "B5", "QA_PIXEL"],
+            qa_band="QA_PIXEL",
+            has_panchromatic=False,
+        )
+
+    def download(
+        self, context: DownloadContext, image_ee: Any, im_bands: List[Dict]
+    ) -> bool:
+        """Download Landsat 5 image."""
+        config = self.get_config()
+        fp_ms = context.filepaths[1]
+        fp_mask = context.filepaths[2]
+
+        # select multispectral bands
+        bands = {
+            "ms": [
+                im_bands[_]
+                for _ in range(len(im_bands))
+                if im_bands[_]["id"] in config.bands
+            ]
+        }
+
+        # adjust polygon to match image coordinates
+        proj = image_ee.select("B1").projection()
+        context.pbar.set_description_str(
+            desc=f"{context.inputs['sitename']}, {config.name}: adjusting polygon {SDS_tools.ordinal(0)} image ",
+            refresh=True,
+        )
+        ee_region = adjust_polygon(
+            context.inputs["polygon"],
+            proj,
+            image_id=context.im_meta["id"],
+            logger=context.logger,
+        )
+
+        # download .tif from EE
+        context.pbar.set_description_str(
+            desc=f"{context.inputs['sitename']}, {config.name}: Downloading tif for {SDS_tools.ordinal(0)} image ",
+            refresh=True,
+        )
+        fn_ms, fn_QA = download_tif(
+            image_ee,
+            ee_region,
+            bands["ms"],
+            fp_ms,
+            config.name,
+            image_id=context.im_meta["id"],
+            logger=context.logger,
+        )
+
+        # resample ms bands to 15m with bilinear interpolation
+        fn_in = fn_ms
+        fn_target = fn_ms
+        fn_out = os.path.join(
+            fp_ms,
+            f"{context.im_date}_{config.name}_{context.inputs['sitename']}_ms{context.suffix}",
+        )
+        filepath_ms = fn_out
+
+        context.pbar.set_description_str(
+            desc=f"{context.inputs['sitename']}, {config.name}: Transforming {SDS_tools.ordinal(0)} image ",
+            refresh=True,
+        )
+        warp_image_to_target(
+            fn_in,
+            fn_out,
+            fn_target,
+            double_res=True,
+            resampling_method="bilinear",
+        )
+
+        # resample QA band to 15m with nearest-neighbour interpolation
+        fn_in = fn_QA
+        fn_target = fn_QA
+        fn_out = os.path.join(
+            fp_mask,
+            f"{context.im_date}_{config.name}_{context.inputs['sitename']}_mask{context.suffix}",
+        )
+        filepath_QA = fn_out
+
+        warp_image_to_target(
+            fn_in,
+            fn_out,
+            fn_target,
+            double_res=True,
+            resampling_method="near",
+        )
+
+        # delete original downloads
+        for original_file in [fn_ms, fn_QA]:
+            os.remove(original_file)
+
+        fn = [filepath_ms, filepath_QA]
+        skip_image = SDS_preprocess.filter_images_by_cloud_cover_nodata(
+            fn,
+            config.name,
+            context.cloud_mask_issue,
+            context.max_cloud_no_data_cover,
+            context.cloud_threshold,
+            do_cloud_mask=True,
+            s2cloudless_prob=60,
+        )
+        return skip_image
+
+
+class Landsat789DownloadStrategy(DownloadStrategy):
+    """Download strategy for Landsat 7, 8, and 9."""
+
+    def __init__(self, satname: str):
+        self.satname = satname
+
+    def get_config(self) -> SatelliteConfig:
+        return SatelliteConfig(
+            name=self.satname,
+            bands=(
+                ["B1", "B2", "B3", "B4", "B5", "QA_PIXEL"]
+                if self.satname == "L7"
+                else ["B2", "B3", "B4", "B5", "B6", "QA_PIXEL"]
+            ),
+            qa_band="QA_PIXEL",
+            has_panchromatic=True,
+            pan_band="B8",
+        )
+
+    def download(
+        self, context: DownloadContext, image_ee: Any, im_bands: List[Dict]
+    ) -> bool:
+        """Download Landsat 7/8/9 image."""
+        config = self.get_config()
+        fp_ms = context.filepaths[1]
+        fp_pan = context.filepaths[2]
+        fp_mask = context.filepaths[3]
+
+        # select bands (multispectral and panchromatic)
+        bands = {
+            "ms": [
+                im_bands[_]
+                for _ in range(len(im_bands))
+                if im_bands[_]["id"] in config.bands
+            ],
+            "pan": [
+                im_bands[_]
+                for _ in range(len(im_bands))
+                if im_bands[_]["id"] == config.pan_band
+            ],
+        }
+
+        # adjust polygon for both ms and pan bands
+        proj_ms = image_ee.select("B1").projection()
+        proj_pan = image_ee.select(config.pan_band).projection()
+        context.pbar.set_description_str(
+            desc=f"{context.inputs['sitename']}, {config.name}: adjusting polygon {SDS_tools.ordinal(0)} image ",
+            refresh=True,
+        )
+        ee_region_ms = adjust_polygon(
+            context.inputs["polygon"],
+            proj_ms,
+            image_id=context.im_meta["id"],
+            logger=context.logger,
+        )
+        ee_region_pan = adjust_polygon(
+            context.inputs["polygon"],
+            proj_pan,
+            image_id=context.im_meta["id"],
+            logger=context.logger,
+        )
+
+        # download both ms and pan bands from EE
+        context.pbar.set_description_str(
+            desc=f"{context.inputs['sitename']}, {config.name}: Downloading tif for {SDS_tools.ordinal(0)} image ",
+            refresh=True,
+        )
+        fn_ms, fn_QA = download_tif(
+            image_ee,
+            ee_region_ms,
+            bands["ms"],
+            fp_ms,
+            config.name,
+            image_id=context.im_meta["id"],
+            logger=context.logger,
+        )
+        fn_pan = download_tif(
+            image_ee,
+            ee_region_pan,
+            bands["pan"],
+            fp_pan,
+            config.name,
+            image_id=context.im_meta["id"],
+        )
+
+        # resample the ms bands to the pan band with bilinear interpolation
+        fn_in = fn_ms
+        fn_target = fn_pan
+        fn_out = os.path.join(
+            fp_ms,
+            f"{context.im_date}_{config.name}_{context.inputs['sitename']}_ms{context.suffix}",
+        )
+        filepath_ms = fn_out
+        context.pbar.set_description_str(
+            desc=f"{context.inputs['sitename']}, {config.name}: Transforming {SDS_tools.ordinal(0)} image ",
+            refresh=True,
+        )
+        warp_image_to_target(
+            fn_in,
+            fn_out,
+            fn_target,
+            double_res=False,
+            resampling_method="bilinear",
+        )
+
+        # resample QA band to the pan band with nearest-neighbour interpolation
+        fn_in = fn_QA
+        fn_target = fn_pan
+        fn_out = os.path.join(
+            fp_mask,
+            f"{context.im_date}_{config.name}_{context.inputs['sitename']}_mask{context.suffix}",
+        )
+        filepath_QA = fn_out
+        warp_image_to_target(
+            fn_in,
+            fn_out,
+            fn_target,
+            double_res=False,
+            resampling_method="near",
+        )
+
+        # rename pan band
+        pan_filename = f"{context.im_date}_{config.name}_{context.inputs['sitename']}_pan{context.suffix}"
+        try:
+            os.rename(fn_pan, os.path.join(fp_pan, pan_filename))
+        except:
+            os.remove(os.path.join(fp_pan, pan_filename))
+            os.rename(fn_pan, os.path.join(fp_pan, pan_filename))
+
+        # delete original downloads
+        for _ in [fn_ms, fn_QA]:
+            os.remove(_)
+
+        filepath_pan = os.path.join(fp_pan, pan_filename)
+        fn = [filepath_ms, filepath_pan, filepath_QA]
+        skip_image = SDS_preprocess.filter_images_by_cloud_cover_nodata(
+            fn,
+            config.name,
+            context.cloud_mask_issue,
+            context.max_cloud_no_data_cover,
+            context.cloud_threshold,
+            do_cloud_mask=True,
+            s2cloudless_prob=60,
+        )
+        return skip_image
+
+
+class Sentinel2DownloadStrategy(DownloadStrategy):
+    """Download strategy for Sentinel-2."""
+
+    def get_config(self) -> SatelliteConfig:
+        return SatelliteConfig(
+            name="S2",
+            bands=["B2", "B3", "B4", "B8", "s2cloudless", "B11", "QA60"],
+            qa_band="QA60",
+            has_swir=True,
+            swir_band="B11",
+            cloudless_band="s2cloudless",
+        )
+
+    def download(
+        self, context: DownloadContext, image_ee: Any, im_bands: List[Dict]
+    ) -> bool:
+        """Download Sentinel-2 image."""
+        config = self.get_config()
+        fp_ms = context.filepaths[1]
+        fp_swir = context.filepaths[2]
+        fp_mask = context.filepaths[3]
+
+        # select bands (10m ms RGB+NIR+s2cloudless, 20m SWIR1, 60m QA band)
+        bands = {
+            "ms": filter_bands(im_bands, config.bands[:5]),
+            "swir": filter_bands(im_bands, config.bands[5:6]),
+            "mask": filter_bands(im_bands, config.bands[-1:]),
+        }
+
+        # adjust polygon for different resolutions
+        proj_ms = image_ee.select("B1").projection()
+        proj_swir = image_ee.select(config.swir_band).projection()
+        proj_mask = image_ee.select(config.qa_band).projection()
+        context.pbar.set_description_str(
+            desc=f"{context.inputs['sitename']}, {config.name}: adjusting polygon {SDS_tools.ordinal(0)} image ",
+            refresh=True,
+        )
+        ee_region_ms = adjust_polygon(
+            context.inputs["polygon"],
+            proj_ms,
+            image_id=context.im_meta["id"],
+            logger=context.logger,
+        )
+        ee_region_swir = adjust_polygon(
+            context.inputs["polygon"],
+            proj_swir,
+            image_id=context.im_meta["id"],
+            logger=context.logger,
+        )
+        ee_region_mask = adjust_polygon(
+            context.inputs["polygon"],
+            proj_mask,
+            image_id=context.im_meta["id"],
+            logger=context.logger,
+        )
+
+        # download the ms, swir and QA bands from EE
+        context.pbar.set_description_str(
+            desc=f"{context.inputs['sitename']}, {config.name}: Downloading tif for {SDS_tools.ordinal(0)} image ",
+            refresh=True,
+        )
+        fn_ms = download_tif(
+            image_ee,
+            ee_region_ms,
+            bands["ms"],
+            fp_ms,
+            config.name,
+            image_id=context.im_meta["id"],
+            logger=context.logger,
+        )
+        fn_swir = download_tif(
+            image_ee,
+            ee_region_swir,
+            bands["swir"],
+            fp_swir,
+            config.name,
+            image_id=context.im_meta["id"],
+            logger=context.logger,
+        )
+        fn_QA = download_tif(
+            image_ee,
+            ee_region_mask,
+            bands["mask"],
+            fp_mask,
+            config.name,
+            image_id=context.im_meta["id"],
+            logger=context.logger,
+        )
+
+        # resample the 20m swir band to the 10m ms band with bilinear interpolation
+        fn_in = fn_swir
+        fn_target = fn_ms
+        fn_out = os.path.join(
+            fp_swir,
+            f"{context.im_date}_{config.name}_{context.inputs['sitename']}_swir{context.suffix}",
+        )
+        filepath_swir = fn_out
+        context.pbar.set_description_str(
+            desc=f"{context.inputs['sitename']}, {config.name}: Transforming {SDS_tools.ordinal(0)} image ",
+            refresh=True,
+        )
+        warp_image_to_target(
+            fn_in,
+            fn_out,
+            fn_target,
+            double_res=False,
+            resampling_method="bilinear",
+        )
+
+        # resample 60m QA band to the 10m ms band with nearest-neighbour interpolation
+        fn_in = fn_QA
+        fn_target = fn_ms
+        fn_out = os.path.join(
+            fp_mask,
+            f"{context.im_date}_{config.name}_{context.inputs['sitename']}_mask{context.suffix}",
+        )
+        filepath_QA = fn_out
+        warp_image_to_target(
+            fn_in,
+            fn_out,
+            fn_target,
+            double_res=False,
+            resampling_method="near",
+        )
+
+        # delete original downloads
+        for _ in [fn_swir, fn_QA]:
+            os.remove(_)
+
+        # rename the multispectral band file
+        dst = os.path.join(
+            fp_ms,
+            f"{context.im_date}_{config.name}_{context.inputs['sitename']}_ms{context.suffix}",
+        )
+        filepath_ms = dst
+        if not os.path.exists(dst):
+            os.rename(fn_ms, dst)
+
+        fn = [filepath_ms, filepath_swir, filepath_QA]
+
+        # filter images by cloud cover
+        skip_image = SDS_preprocess.filter_images_by_cloud_cover_nodata(
+            fn,
+            config.name,
+            context.cloud_mask_issue,
+            context.max_cloud_no_data_cover,
+            context.cloud_threshold,
+            do_cloud_mask=True,
+            s2cloudless_prob=60,
+        )
+        return skip_image
+
+
+class DownloadStrategyFactory:
+    """Factory for creating download strategies."""
+
+    @staticmethod
+    def create_strategy(satname: str) -> DownloadStrategy:
+        """Create the appropriate download strategy for the satellite."""
+        strategies = {
+            "L5": Landsat5DownloadStrategy(),
+            "L7": Landsat789DownloadStrategy("L7"),
+            "L8": Landsat789DownloadStrategy("L8"),
+            "L9": Landsat789DownloadStrategy("L9"),
+            "S2": Sentinel2DownloadStrategy(),
+        }
+
+        if satname not in strategies:
+            raise ValueError(f"No download strategy available for satellite: {satname}")
+
+        return strategies[satname]
+
+
 def download_single_image(
     i,
     satname,
@@ -1717,34 +2202,26 @@ def download_single_image(
     im_dict_s2cloudless=None,
 ):
     """
-    Downloads a single image for the specified satellite.
+    Downloads a single image for the specified satellite using strategy pattern.
 
     Returns:
         bool: True if the image should be skipped, False otherwise
     """
-    # initalize the variables
-    # filepath (fp) for the multispectural file
-    fp_ms = ""
-    # store the bands availble
-    bands = dict([])
-    # dictionary containing the filepaths for each type of file downloaded
-    im_fn = dict([])
-
-    # get image metadata
+    # Get image metadata
     im_meta = im_dict_T1[satname][i]
 
-    # get time of acquisition (UNIX time) and convert to datetime
+    # Get time of acquisition (UNIX time) and convert to datetime
     acquisition_time = im_meta["properties"]["system:time_start"]
     im_timestamp = datetime.fromtimestamp(acquisition_time / 1000, tz=pytz.utc)
     im_date = im_timestamp.strftime("%Y-%m-%d-%H-%M-%S")
 
-    # get epsg code
+    # Get epsg code
     im_epsg = int(im_meta["bands"][0]["crs"][5:])
 
-    # select image by id
+    # Select image by id
     image_ee = ee.Image(im_meta["id"])
 
-    # for S2 add s2cloudless probability band
+    # For S2 add s2cloudless probability band
     if satname == "S2":
         if len(im_dict_s2cloudless[i]) == 0:
             raise Exception(
@@ -1755,23 +2232,9 @@ def download_single_image(
         cloud_prob = im_cloud.select("probability").rename("s2cloudless")
         image_ee = image_ee.addBands(cloud_prob)
 
-    if satname != "S1":
-        # get quality flags (geometric and radiometric quality)
-        accuracy_georef = get_georeference_accuracy(satname, im_meta)
-        image_quality = get_image_quality(satname, im_meta)
-        # update the loading bar with the status
-        pbar.set_description_str(
-            desc=f"{inputs['sitename']}, {satname}: Loading bands for {SDS_tools.ordinal(i)} image ",
-            refresh=True,
-        )
-        # first delete dimensions key from dictionary
-        # otherwise the entire image is extracted (don't know why)
-        im_bands = remove_dimensions_from_bands(
-            image_ee, image_id=im_meta["id"], logger=logger
-        )
-
-    # Download based on satellite type
     skip_image = False
+
+    # Handle Sentinel-1 separately (existing logic)
     if satname == "S1":
         result = process_sentinel1_image(
             image_ee,
@@ -1786,96 +2249,63 @@ def download_single_image(
         if result.get("skip_image", False):
             skip_image = True
         else:
-            im_fn["ms"] = result["im_fn"]["ms"]
-    elif satname == "L5":
-        skip_image = download_landsat5_image(
-            i,
-            image_ee,
-            im_bands,
-            im_meta,
-            im_date,
-            im_epsg,
-            accuracy_georef,
-            image_quality,
-            inputs,
-            filepaths,
-            bands_id,
-            all_names,
-            suffix,
-            pbar,
-            logger,
-            cloud_mask_issue,
-            max_cloud_no_data_cover,
-            cloud_threshold,
+            # Create basic filename structure for S1
+            im_fn = {"ms": result["im_fn"]["ms"]}
+    else:
+        # Get quality flags for non-S1 satellites
+        accuracy_georef = get_georeference_accuracy(satname, im_meta)
+        image_quality = get_image_quality(satname, im_meta)
+
+        # Update progress bar
+        pbar.set_description_str(
+            desc=f"{inputs['sitename']}, {satname}: Loading bands for {SDS_tools.ordinal(i)} image ",
+            refresh=True,
         )
+
+        # Remove dimensions from bands
+        im_bands = remove_dimensions_from_bands(
+            image_ee, image_id=im_meta["id"], logger=logger
+        )
+
+        # Create download context
+        context = DownloadContext(
+            inputs=inputs,
+            filepaths=filepaths,
+            im_meta=im_meta,
+            im_date=im_date,
+            im_epsg=im_epsg,
+            accuracy_georef=accuracy_georef,
+            image_quality=image_quality,
+            suffix=suffix,
+            pbar=pbar,
+            logger=logger,
+            cloud_mask_issue=cloud_mask_issue,
+            max_cloud_no_data_cover=max_cloud_no_data_cover,
+            cloud_threshold=cloud_threshold,
+        )
+
+        # Get download strategy and execute
+        strategy = DownloadStrategyFactory.create_strategy(satname)
+        skip_image = strategy.download(context, image_ee, im_bands)
+
+        # Create filenames if not skipping
         if not skip_image:
+            config = strategy.get_config()
+            bands = {"ms": []}  # Simplified for filename creation
+            if config.has_panchromatic:
+                bands["pan"] = []
+            if config.has_swir:
+                bands["swir"] = []
+            bands["mask"] = []
+
             im_fn = create_filenames(
                 bands, im_date, satname, inputs["sitename"], suffix
             )
             im_fn = handle_duplicate_image_names(
                 all_names, bands, im_fn, im_date, satname, inputs["sitename"], suffix
             )
-            im_fn["mask"] = im_fn["ms"].replace("_ms", "_mask")
-            all_names.append(im_fn["ms"])
-    elif satname in ["L7", "L8", "L9"]:
-        skip_image = download_landsat789_image(
-            i,
-            satname,
-            image_ee,
-            im_bands,
-            im_meta,
-            im_date,
-            im_epsg,
-            accuracy_georef,
-            image_quality,
-            inputs,
-            filepaths,
-            bands_id,
-            all_names,
-            suffix,
-            pbar,
-            logger,
-            cloud_mask_issue,
-            max_cloud_no_data_cover,
-            cloud_threshold,
-        )
-        if not skip_image:
-            im_fn = create_filenames(
-                bands, im_date, satname, inputs["sitename"], suffix
-            )
-            im_fn = handle_duplicate_image_names(
-                all_names, bands, im_fn, im_date, satname, inputs["sitename"], suffix
-            )
-            im_fn["mask"] = im_fn["ms"].replace("_ms", "_mask")
-            all_names.append(im_fn["ms"])
-    elif satname == "S2":
-        skip_image = download_sentinel2_image(
-            i,
-            image_ee,
-            im_bands,
-            im_meta,
-            im_date,
-            im_epsg,
-            accuracy_georef,
-            image_quality,
-            inputs,
-            filepaths,
-            bands_id,
-            all_names,
-            suffix,
-            pbar,
-            logger,
-            cloud_mask_issue,
-            max_cloud_no_data_cover,
-            cloud_threshold,
-        )
-        if not skip_image:
-            im_fn = create_filenames(
-                bands, im_date, satname, inputs["sitename"], suffix
-            )
-            im_fn = handle_duplicate_image_names(
-                all_names, bands, im_fn, im_date, satname, inputs["sitename"], suffix
-            )
+            if config.has_panchromatic or config.has_swir:
+                im_fn["mask"] = im_fn["ms"].replace("_ms", "_mask")
             all_names.append(im_fn["ms"])
 
     # Save JPG if requested and image not skipped
@@ -1892,14 +2322,15 @@ def download_single_image(
     # Save metadata if not S1 and not skipped
     if satname != "S1" and not skip_image:
         try:
+            fp_ms = filepaths[1]  # multispectral folder
             write_image_metadata(
                 fp_ms,
                 im_fn,
                 im_meta,
                 im_fn["ms"],
                 im_epsg,
-                accuracy_georef,
-                image_quality,
+                accuracy_georef if satname != "S1" else "",
+                image_quality if satname != "S1" else "",
                 filepaths[0],
                 logger,
             )
@@ -1937,403 +2368,8 @@ def save_image_jpg(
     )
 
 
-def download_landsat5_image(
-    i,
-    image_ee,
-    im_bands,
-    im_meta,
-    im_date,
-    im_epsg,
-    accuracy_georef,
-    image_quality,
-    inputs,
-    filepaths,
-    bands_id,
-    all_names,
-    suffix,
-    pbar,
-    logger,
-    cloud_mask_issue,
-    max_cloud_no_data_cover,
-    cloud_threshold,
-):
-    """Download Landsat 5 image."""
-    fp_ms = filepaths[1]
-    fp_mask = filepaths[2]
-    # select multispectral bands
-    bands = {
-        "ms": [
-            im_bands[_] for _ in range(len(im_bands)) if im_bands[_]["id"] in bands_id
-        ]
-    }
-    # adjust polygon to match image coordinates so that there is no resampling
-    proj = image_ee.select("B1").projection()
-    pbar.set_description_str(
-        desc=f"{inputs['sitename']}, L5: adjusting polygon {SDS_tools.ordinal(i)} image ",
-        refresh=True,
-    )
-    ee_region = adjust_polygon(
-        inputs["polygon"],
-        proj,
-        image_id=im_meta["id"],
-        logger=logger,
-    )
-    # download .tif from EE (one file with ms bands and one file with QA band)
-    pbar.set_description_str(
-        desc=f"{inputs['sitename']}, L5: Downloading tif for {SDS_tools.ordinal(i)} image ",
-        refresh=True,
-    )
-    fn_ms, fn_QA = download_tif(
-        image_ee,
-        ee_region,
-        bands["ms"],
-        fp_ms,
-        "L5",
-        image_id=im_meta["id"],
-        logger=logger,
-    )
-    # resample ms bands to 15m with bilinear interpolation
-    fn_in = fn_ms
-    fn_target = fn_ms
-    fn_out = os.path.join(fp_ms, f"{im_date}_L5_{inputs['sitename']}_ms{suffix}")
-    filepath_ms = fn_out
-
-    pbar.set_description_str(
-        desc=f"{inputs['sitename']}, L5: Transforming {SDS_tools.ordinal(i)} image ",
-        refresh=True,
-    )
-    warp_image_to_target(
-        fn_in,
-        fn_out,
-        fn_target,
-        double_res=True,
-        resampling_method="bilinear",
-    )
-
-    # resample QA band to 15m with nearest-neighbour interpolation
-    fn_in = fn_QA
-    fn_target = fn_QA
-    fn_out = os.path.join(fp_mask, f"{im_date}_L5_{inputs['sitename']}_mask{suffix}")
-    filepath_QA = fn_out
-
-    warp_image_to_target(
-        fn_in,
-        fn_out,
-        fn_target,
-        double_res=True,
-        resampling_method="near",
-    )
-    # delete original downloads
-    for original_file in [fn_ms, fn_QA]:
-        os.remove(original_file)
-
-    fn = [filepath_ms, filepath_QA]
-    skip_image = SDS_preprocess.filter_images_by_cloud_cover_nodata(
-        fn,
-        "L5",
-        cloud_mask_issue,
-        max_cloud_no_data_cover,
-        cloud_threshold,
-        do_cloud_mask=True,
-        s2cloudless_prob=60,
-    )
-    return skip_image
-
-
-def download_landsat789_image(
-    i,
-    satname,
-    image_ee,
-    im_bands,
-    im_meta,
-    im_date,
-    im_epsg,
-    accuracy_georef,
-    image_quality,
-    inputs,
-    filepaths,
-    bands_id,
-    all_names,
-    suffix,
-    pbar,
-    logger,
-    cloud_mask_issue,
-    max_cloud_no_data_cover,
-    cloud_threshold,
-):
-    """Download Landsat 7, 8, or 9 image."""
-    fp_ms = filepaths[1]
-    fp_pan = filepaths[2]
-    fp_mask = filepaths[3]
-    # select bands (multispectral and panchromatic)
-    bands = {
-        "ms": [
-            im_bands[_] for _ in range(len(im_bands)) if im_bands[_]["id"] in bands_id
-        ],
-        "pan": [
-            im_bands[_] for _ in range(len(im_bands)) if im_bands[_]["id"] in ["B8"]
-        ],
-    }
-    # adjust polygon for both ms and pan bands
-    proj_ms = image_ee.select("B1").projection()
-    proj_pan = image_ee.select("B8").projection()
-    pbar.set_description_str(
-        desc=f"{inputs['sitename']}, {satname}: adjusting polygon {SDS_tools.ordinal(i)} image ",
-        refresh=True,
-    )
-    ee_region_ms = adjust_polygon(
-        inputs["polygon"],
-        proj_ms,
-        image_id=im_meta["id"],
-        logger=logger,
-    )
-    ee_region_pan = adjust_polygon(
-        inputs["polygon"],
-        proj_pan,
-        image_id=im_meta["id"],
-        logger=logger,
-    )
-
-    # download both ms and pan bands from EE
-    pbar.set_description_str(
-        desc=f"{inputs['sitename']}, {satname}: Downloading tif for {SDS_tools.ordinal(i)} image ",
-        refresh=True,
-    )
-    fn_ms, fn_QA = download_tif(
-        image_ee,
-        ee_region_ms,
-        bands["ms"],
-        fp_ms,
-        satname,
-        image_id=im_meta["id"],
-        logger=logger,
-    )
-    fn_pan = download_tif(
-        image_ee,
-        ee_region_pan,
-        bands["pan"],
-        fp_pan,
-        satname,
-        image_id=im_meta["id"],
-    )
-    # resample the ms bands to the pan band with bilinear interpolation (for pan-sharpening later)
-    fn_in = fn_ms
-    fn_target = fn_pan
-    fn_out = os.path.join(fp_ms, f"{im_date}_{satname}_{inputs['sitename']}_ms{suffix}")
-    filepath_ms = fn_out
-    pbar.set_description_str(
-        desc=f"{inputs['sitename']}, {satname}: Transforming {SDS_tools.ordinal(i)} image ",
-        refresh=True,
-    )
-    warp_image_to_target(
-        fn_in,
-        fn_out,
-        fn_target,
-        double_res=False,
-        resampling_method="bilinear",
-    )
-
-    # resample QA band to the pan band with nearest-neighbour interpolation
-    fn_in = fn_QA
-    fn_target = fn_pan
-    fn_out = os.path.join(
-        fp_mask, f"{im_date}_{satname}_{inputs['sitename']}_mask{suffix}"
-    )
-    filepath_QA = fn_out
-    warp_image_to_target(
-        fn_in,
-        fn_out,
-        fn_target,
-        double_res=False,
-        resampling_method="near",
-    )
-
-    # rename pan band
-    try:
-        os.rename(
-            fn_pan,
-            os.path.join(
-                fp_pan, f"{im_date}_{satname}_{inputs['sitename']}_pan{suffix}"
-            ),
-        )
-    except:
-        os.remove(
-            os.path.join(
-                fp_pan, f"{im_date}_{satname}_{inputs['sitename']}_pan{suffix}"
-            )
-        )
-        os.rename(
-            fn_pan,
-            os.path.join(
-                fp_pan, f"{im_date}_{satname}_{inputs['sitename']}_pan{suffix}"
-            ),
-        )
-    # delete original downloads
-    for _ in [fn_ms, fn_QA]:
-        os.remove(_)
-
-    filepath_pan = os.path.join(
-        fp_pan, f"{im_date}_{satname}_{inputs['sitename']}_pan{suffix}"
-    )
-    fn = [filepath_ms, filepath_pan, filepath_QA]
-    skip_image = SDS_preprocess.filter_images_by_cloud_cover_nodata(
-        fn,
-        satname,
-        cloud_mask_issue,
-        max_cloud_no_data_cover,
-        cloud_threshold,
-        do_cloud_mask=True,
-        s2cloudless_prob=60,
-    )
-    return skip_image
-
-
-def download_sentinel2_image(
-    i,
-    image_ee,
-    im_bands,
-    im_meta,
-    im_date,
-    im_epsg,
-    accuracy_georef,
-    image_quality,
-    inputs,
-    filepaths,
-    bands_id,
-    all_names,
-    suffix,
-    pbar,
-    logger,
-    cloud_mask_issue,
-    max_cloud_no_data_cover,
-    cloud_threshold,
-):
-    """Download Sentinel-2 image."""
-    fp_ms = filepaths[1]
-    fp_swir = filepaths[2]
-    fp_mask = filepaths[3]
-    # select bands (10m ms RGB+NIR+s2cloudless, 20m SWIR1, 60m QA band)
-    bands = {
-        "ms": filter_bands(im_bands, bands_id[:5]),
-        "swir": filter_bands(im_bands, bands_id[5:6]),
-        "mask": filter_bands(im_bands, bands_id[-1:]),
-    }
-    # adjust polygon for both ms and pan bands
-    # RGB and NIR bands 10m resolution and same footprint
-    proj_ms = image_ee.select("B1").projection()
-    # SWIR band 20m resolution and different footprint
-    proj_swir = image_ee.select("B11").projection()
-    proj_mask = image_ee.select("QA60").projection()
-    pbar.set_description_str(
-        desc=f"{inputs['sitename']}, S2: adjusting polygon {SDS_tools.ordinal(i)} image ",
-        refresh=True,
-    )
-    ee_region_ms = adjust_polygon(
-        inputs["polygon"],
-        proj_ms,
-        image_id=im_meta["id"],
-        logger=logger,
-    )
-    ee_region_swir = adjust_polygon(
-        inputs["polygon"],
-        proj_swir,
-        image_id=im_meta["id"],
-        logger=logger,
-    )
-    ee_region_mask = adjust_polygon(
-        inputs["polygon"],
-        proj_mask,
-        image_id=im_meta["id"],
-        logger=logger,
-    )
-    # download the ms, swir and QA bands from EE
-    pbar.set_description_str(
-        desc=f"{inputs['sitename']}, S2: Downloading tif for {SDS_tools.ordinal(i)} image ",
-        refresh=True,
-    )
-    fn_ms = download_tif(
-        image_ee,
-        ee_region_ms,
-        bands["ms"],
-        fp_ms,
-        "S2",
-        image_id=im_meta["id"],
-        logger=logger,
-    )
-    fn_swir = download_tif(
-        image_ee,
-        ee_region_swir,
-        bands["swir"],
-        fp_swir,
-        "S2",
-        image_id=im_meta["id"],
-        logger=logger,
-    )
-    fn_QA = download_tif(
-        image_ee,
-        ee_region_mask,
-        bands["mask"],
-        fp_mask,
-        "S2",
-        image_id=im_meta["id"],
-        logger=logger,
-    )
-
-    # resample the 20m swir band to the 10m ms band with bilinear interpolation
-    fn_in = fn_swir
-    fn_target = fn_ms
-    fn_out = os.path.join(fp_swir, f"{im_date}_S2_{inputs['sitename']}_swir{suffix}")
-    filepath_swir = fn_out
-    pbar.set_description_str(
-        desc=f"{inputs['sitename']}, S2: Transforming {SDS_tools.ordinal(i)} image ",
-        refresh=True,
-    )
-    warp_image_to_target(
-        fn_in,
-        fn_out,
-        fn_target,
-        double_res=False,
-        resampling_method="bilinear",
-    )
-
-    # resample 60m QA band to the 10m ms band with nearest-neighbour interpolation
-    fn_in = fn_QA
-    fn_target = fn_ms
-    fn_out = os.path.join(fp_mask, f"{im_date}_S2_{inputs['sitename']}_mask{suffix}")
-    filepath_QA = fn_out
-    warp_image_to_target(
-        fn_in,
-        fn_out,
-        fn_target,
-        double_res=False,
-        resampling_method="near",
-    )
-
-    # delete original downloads
-    for _ in [fn_swir, fn_QA]:
-        os.remove(_)
-    # rename the multispectral band file
-    dst = os.path.join(fp_ms, f"{im_date}_S2_{inputs['sitename']}_ms{suffix}")
-    filepath_ms = dst
-    if not os.path.exists(dst):
-        os.rename(fn_ms, dst)
-
-    fn = [filepath_ms, filepath_swir, filepath_QA]
-
-    # Removes images whose cloud cover and no data coverage exceeds the threshold
-    skip_image = SDS_preprocess.filter_images_by_cloud_cover_nodata(
-        fn,
-        "S2",
-        cloud_mask_issue,
-        max_cloud_no_data_cover,
-        cloud_threshold,
-        do_cloud_mask=True,
-        s2cloudless_prob=60,
-    )
-    return skip_image
-
-
 def parse_date_from_filename(filename: str) -> datetime:
+
     date_str = filename[0:19]
     return pytz.utc.localize(
         datetime(
