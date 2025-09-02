@@ -6,6 +6,9 @@ Author: Kilian Vos, Water Research Laboratory, University of New South Wales
 """
 
 # Standard library imports
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Protocol, Any
+from abc import ABC, abstractmethod
 import ast
 import logging
 import os
@@ -1691,16 +1694,10 @@ def retrieve_images(
                     logger.error(
                         f"The download for satellite {satname} {im_dict_T1[satname][i].get('id','unknown')} failed due to \n {error} \n Traceback {traceback.format_exc()}"
                     )
-                    continue
     # combines all the metadata into a single dictionary and saves it to json
     metadata = get_metadata(inputs)
     print("Satellite images downloaded from GEE and save in %s" % im_folder)
     return metadata
-
-
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Protocol, Any
-from abc import ABC, abstractmethod
 
 
 @dataclass
