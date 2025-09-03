@@ -402,8 +402,6 @@ class TooManyRequests(Exception):
 def retry(func):
     @functools.wraps(func)
     def wrapper_retry(*args, **kwargs):
-        # Get image_id from kwargs or use 'Unknown'
-        image_id = kwargs.get("image_id", "Unknown image id")
         logger = kwargs.get("logger", None)
         max_attempts = 3
         for attempt in range(max_attempts):
@@ -2192,8 +2190,9 @@ def retrieve_images(
                     continue
                 finally:
                     try:
+                        # Don't try to save the metadata if the image was skipped.
                         # attempt to save the metadata for the image even if something go wrong during the download (S1 has a different metadata format so it does not apply)
-                        if satname != "S1":
+                        if satname != "S1" and not skip_image:
                             # write the metadata to a txt file if possible
                             write_image_metadata(
                                 fp_ms,
@@ -2210,7 +2209,6 @@ def retrieve_images(
                         logger.error(
                             f"Could not save metadata for {im_meta.get('id','unknown')} that failed.\n{e}"
                         )
-                        continue
     # combines all the metadata into a single dictionary and saves it to json
     metadata = get_metadata(inputs)
     print("Satellite images downloaded from GEE and save in %s" % im_folder)
