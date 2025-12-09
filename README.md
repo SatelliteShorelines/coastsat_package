@@ -68,6 +68,8 @@ Our recent updates to the coastsat-package were driven by the goal of enhancing 
 
 - `-U` (upgrade flag) this gets the latest release of the CoastSat package
   > `pip install coastsat_package -U`
+- Alternatively, to install/upgrade to a specific version of CoastSat, e.g. 1.2.3:
+  > `pip install "coastsat_package==1.2.3"`
 
 ## Issues
 
@@ -348,3 +350,4 @@ This section provides code to compare the satellite-derived shorelines against t
 5. Vos, K. and Deng, W. and Harley, M. D. and Turner, I. L. and Splinter, K. D. M. (2022). Beach-face slope dataset for Australia. _Earth System Science Data_. volume 14, 3, p. 1345--1357. https://doi.org/10.5194/essd-14-1345-2022
 
 6. Training dataset used for pixel-wise classification in CoastSat: https://doi.org/10.5281/zenodo.3334147
+
