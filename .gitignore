@@ -5,3 +5,6 @@ data/*
 dist/*
 *.prof
 ./data/*
+# pixi environments
+.pixi/*
+!.pixi/config.toml
