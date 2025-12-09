@@ -1690,10 +1690,11 @@ def retrieve_images(
                     # for S2 add s2cloudless probability band
                     if satname == "S2":
                         if len(im_dict_s2cloudless[i]) == 0:
-                            raise Exception(
-                                "could not find matching s2cloudless image, raise issue on Github at"
-                                + "https://github.com/kvos/CoastSat/issues and provide your inputs."
+                            print(
+                                "Warning: S2cloudless mask for image %s is not available."
+                                % im_date
                             )
+                            continue  # skip this image
                         im_cloud = ee.Image(im_dict_s2cloudless[i]["id"])
                         cloud_prob = im_cloud.select("probability").rename(
                             "s2cloudless"
@@ -2506,36 +2507,30 @@ def get_s2cloudless(
     List[Union[Dict, List]]: A list where each element is either a dictionary containing metadata of a matched
     s2cloudless image or an empty list if no match is found.
     """
-    try:
-        # Convert string dates to datetime objects
-        dates = [datetime.strptime(date, "%Y-%m-%d") for date in inputs["dates"]]
-        polygon = inputs["polygon"]
-        collection_name = "COPERNICUS/S2_CLOUD_PROBABILITY"
-        collection = ee.ImageCollection(collection_name)
-        cloud_images_list = get_images_list_from_collection(
-            collection,
-            polygon,
-            dates,
-            min_roi_coverage=inputs.get("min_roi_coverage", 0.3),
-        )
-        # Extract image IDs from the s2cloudless collection
-        cloud_indices = [
-            image["properties"]["system:index"] for image in cloud_images_list
-        ]
-        # match with S2 images
-        matched_cloud_images = []
-        for image_meta in image_list:
-            index = image_meta["properties"]["system:index"]
+    # Convert string dates to datetime objects
+    dates = [datetime.strptime(date, "%Y-%m-%d") for date in inputs["dates"]]
+    polygon = inputs["polygon"]
+    collection = ee.ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")
+    cloud_images_list = get_images_list_from_collection(
+        collection,
+        polygon,
+        dates,
+        min_roi_coverage=inputs.get("min_roi_coverage", 0.3),
+    )
+    # Extract image IDs from the s2cloudless collection
+    cloud_indices = [image["properties"]["system:index"] for image in cloud_images_list]
+    # match with S2 images
+    matched_cloud_images = []
+    for image_meta in image_list:
+        index = image_meta["properties"]["system:index"]
 
-            if index in cloud_indices:
-                matched_index = cloud_indices.index(index)
-                matched_cloud_images.append(cloud_images_list[matched_index])
-            else:  # append an empty list if no match is found
-                matched_cloud_images.append([])
+        if index in cloud_indices:
+            matched_index = cloud_indices.index(index)
+            matched_cloud_images.append(cloud_images_list[matched_index])
+        else:  # append an empty list if no match is found
+            matched_cloud_images.append([])
 
-        return matched_cloud_images
-    except Exception as e:
-        raise e
+    return matched_cloud_images
 
 
 def remove_cloudy_images(im_list, satname, cloud_threshold=0.95, **kwargs):
