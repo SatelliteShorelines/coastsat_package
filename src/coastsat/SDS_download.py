@@ -7,6 +7,8 @@ Author: Kilian Vos, Water Research Laboratory, University of New South Wales
 
 # Standard library imports
 import ast
+import hashlib
+import json
 import logging
 import os
 import time
@@ -42,6 +44,127 @@ from coastsat import SDS_preprocess, SDS_tools
 
 np.seterr(all="ignore")  # raise/ignore divisions by 0 and nans
 gdal.PushErrorHandler("CPLQuietErrorHandler")
+
+
+def get_skip_cache_path(inputs: dict) -> str:
+    """Return the site-level skip cache JSON path."""
+    site_dir = os.path.join(inputs["filepath"], inputs["sitename"])
+    return os.path.join(site_dir, f"{inputs['sitename']}_skip_cache.json")
+
+
+def get_skip_query_signature(inputs: dict) -> str:
+    """Build a stable hash for the query context used to scope skip-cache entries."""
+    payload = {
+        "polygon": inputs.get("polygon", []),
+        "dates": inputs.get("dates", []),
+        "sat_list": sorted(inputs.get("sat_list", [])),
+    }
+    payload_json = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+
+
+def load_skip_cache(inputs: dict) -> dict:
+    """Load skip cache from disk, returning an empty default when missing/invalid."""
+    default_cache = {"version": 1, "entries": {}}
+    cache_path = get_skip_cache_path(inputs)
+    if not os.path.exists(cache_path):
+        return default_cache
+
+    try:
+        with open(cache_path, "r") as fp:
+            cache = json.load(fp)
+        if not isinstance(cache, dict):
+            return default_cache
+        if "entries" not in cache or not isinstance(cache["entries"], dict):
+            cache["entries"] = {}
+        if "version" not in cache:
+            cache["version"] = 1
+        return cache
+    except Exception:
+        return default_cache
+
+
+def save_skip_cache(inputs: dict, cache: dict) -> None:
+    """Persist skip cache to disk."""
+    cache_path = get_skip_cache_path(inputs)
+    SDS_preprocess.write_to_json(cache_path, cache)
+
+
+def build_skip_cache_key(im_meta: dict, satname: str) -> str:
+    """Build a stable key for identifying an EE image across runs."""
+    props = im_meta.get("properties", {})
+    image_id = im_meta.get("id", "")
+    if image_id:
+        raw_key = image_id
+    else:
+        system_index = props.get("system:index", "")
+        system_time = props.get("system:time_start", "")
+        polarization = props.get("transmitterReceiverPolarisation", "")
+        if isinstance(polarization, list):
+            polarization = "-".join(polarization)
+        raw_key = f"{satname}|{system_index}|{system_time}|{polarization}"
+
+    return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+
+
+def should_skip_from_cache(
+    cache_entry: dict,
+    query_signature: str,
+    max_cloud_no_data_cover: float = None,
+    max_cloud_cover: float = None,
+) -> bool:
+    """Return True when cached cloud/no-data metrics still fail current thresholds."""
+    if not cache_entry or cache_entry.get("skip_type") != "cloud_nodata":
+        return False
+
+    if cache_entry.get("query_signature") != query_signature:
+        return False
+
+    cloud_cover_combined = cache_entry.get("cloud_cover_combined")
+    cloud_cover = cache_entry.get("cloud_cover")
+    if cloud_cover_combined is None or cloud_cover is None:
+        return False
+
+    if (
+        max_cloud_no_data_cover is not None
+        and cloud_cover_combined > max_cloud_no_data_cover
+    ):
+        return True
+
+    if max_cloud_cover is not None and cloud_cover > max_cloud_cover:
+        return True
+
+    return False
+
+
+def record_skip_cache_entry(
+    skip_cache: dict,
+    cache_key: str,
+    im_meta: dict,
+    satname: str,
+    query_signature: str,
+    metrics: dict,
+    max_cloud_no_data_cover: float,
+    max_cloud_cover: float,
+    s2cloudless_prob: int,
+) -> None:
+    """Record a cloud/no-data skip decision and measured values in cache."""
+    skip_cache.setdefault("entries", {})
+    skip_cache["entries"][cache_key] = {
+        "image_id": im_meta.get("id", ""),
+        "satname": satname,
+        "skip_type": "cloud_nodata",
+        "query_signature": query_signature,
+        "cloud_cover_combined": float(metrics.get("cloud_cover_combined", 0.0)),
+        "cloud_cover": float(metrics.get("cloud_cover", 0.0)),
+        "reason": metrics.get("reason", "cloud_nodata"),
+        "settings": {
+            "max_cloud_no_data_cover": max_cloud_no_data_cover,
+            "max_cloud_cover": max_cloud_cover,
+            "s2cloudless_prob": s2cloudless_prob,
+        },
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def get_metadata_combined(inputs: Dict[str, Any]) -> Dict[str, Dict[str, list]]:
@@ -1522,6 +1645,7 @@ def retrieve_images(
     max_cloud_no_data_cover=0.95,
     scene_cloud_cover=0.95,
     min_roi_coverage: float = 0.3,
+    s2cloudless_prob: int = 60,
 ):
     """
     Downloads all images from Landsat 5, Landsat 7, Landsat 8, Landsat 9 and Sentinel-2
@@ -1575,6 +1699,13 @@ def retrieve_images(
         maximum cloud cover percentage for the scene (not just the ROI)
     min_roi_coverage: float (default: 0.3)
         The minimum percentage of the ROI that must be covered by the image.
+    s2cloudless_prob: int (default: 60)
+        Threshold used for Sentinel-2 s2cloudless cloud masking when filtering cloud/no-data.
+
+    Notes:
+    -----------
+    Cloud/no-data skips are cached in a site-level JSON file so resumed runs can avoid
+    re-downloading known rejected images when they still exceed the current thresholds.
     Returns:
     -----------
     metadata: dict
@@ -1630,6 +1761,8 @@ def retrieve_images(
 
     sat_list = inputs["sat_list"]
     dates = inputs["dates"]
+    skip_cache = load_skip_cache(inputs)
+    query_signature = get_skip_query_signature(inputs)
 
     if np.all([len(im_dict_T1[satname]) == 0 for satname in im_dict_T1.keys()]):
         print(
@@ -1663,6 +1796,7 @@ def retrieve_images(
             )
             for i in pbar:
                 try:
+                    skip_image = False
                     # initalize the variables
                     # filepath (fp) for the multispectural file
                     fp_ms = ""
@@ -1673,6 +1807,20 @@ def retrieve_images(
 
                     # get image metadata
                     im_meta = im_dict_T1[satname][i]
+                    cache_key = build_skip_cache_key(im_meta, satname)
+                    cache_entry = skip_cache.get("entries", {}).get(cache_key)
+
+                    if should_skip_from_cache(
+                        cache_entry,
+                        query_signature,
+                        max_cloud_no_data_cover=max_cloud_no_data_cover,
+                        max_cloud_cover=cloud_threshold,
+                    ):
+                        skip_image = True
+                        print(
+                            f"Skipping cached image '{im_meta.get('id', 'unknown')}' due to cloud/no-data cache"
+                        )
+                        continue
 
                     # get time of acquisition (UNIX time) and convert to datetime
                     acquisition_time = im_meta["properties"]["system:time_start"]
@@ -1690,6 +1838,7 @@ def retrieve_images(
                     # for S2 add s2cloudless probability band
                     if satname == "S2":
                         if len(im_dict_s2cloudless[i]) == 0:
+                            skip_image = True
                             print(
                                 "Warning: S2cloudless mask for image %s is not available."
                                 % im_date
@@ -1834,17 +1983,32 @@ def retrieve_images(
                             os.remove(original_file)
 
                         fn = [filepath_ms, filepath_QA]
-                        skip_image = SDS_preprocess.filter_images_by_cloud_cover_nodata(
-                            fn,
-                            satname,
-                            cloud_mask_issue,
-                            max_cloud_no_data_cover,
-                            cloud_threshold,
-                            do_cloud_mask=True,
-                            s2cloudless_prob=60,
+                        filter_metrics = (
+                            SDS_preprocess.filter_images_by_cloud_cover_nodata(
+                                fn,
+                                satname,
+                                cloud_mask_issue,
+                                max_cloud_no_data_cover,
+                                cloud_threshold,
+                                do_cloud_mask=True,
+                                s2cloudless_prob=s2cloudless_prob,
+                                return_metrics=True,
+                            )
                         )
+                        skip_image = filter_metrics["filtered"]
                         # if the images was filtered out, skip the image being saved as a jpg
                         if skip_image:
+                            record_skip_cache_entry(
+                                skip_cache,
+                                cache_key,
+                                im_meta,
+                                satname,
+                                query_signature,
+                                filter_metrics,
+                                max_cloud_no_data_cover,
+                                cloud_threshold,
+                                s2cloudless_prob,
+                            )
                             continue
 
                     # =============================================================================================#
@@ -1979,18 +2143,33 @@ def retrieve_images(
 
                         filepath_pan = os.path.join(fp_pan, im_fn["pan"])
                         fn = [filepath_ms, filepath_pan, filepath_QA]
-                        skip_image = SDS_preprocess.filter_images_by_cloud_cover_nodata(
-                            fn,
-                            satname,
-                            cloud_mask_issue,
-                            max_cloud_no_data_cover,
-                            cloud_threshold,
-                            do_cloud_mask=True,
-                            s2cloudless_prob=60,
+                        filter_metrics = (
+                            SDS_preprocess.filter_images_by_cloud_cover_nodata(
+                                fn,
+                                satname,
+                                cloud_mask_issue,
+                                max_cloud_no_data_cover,
+                                cloud_threshold,
+                                do_cloud_mask=True,
+                                s2cloudless_prob=s2cloudless_prob,
+                                return_metrics=True,
+                            )
                         )
+                        skip_image = filter_metrics["filtered"]
 
                         # if the images was filtered out, skip the image being saved as a jpg
                         if skip_image:
+                            record_skip_cache_entry(
+                                skip_cache,
+                                cache_key,
+                                im_meta,
+                                satname,
+                                query_signature,
+                                filter_metrics,
+                                max_cloud_no_data_cover,
+                                cloud_threshold,
+                                s2cloudless_prob,
+                            )
                             continue
 
                         if save_jpg:
@@ -2005,6 +2184,7 @@ def retrieve_images(
                                 filepath_data=inputs["filepath"],
                                 collection=inputs["landsat_collection"],
                                 apply_cloud_mask=apply_cloud_mask,
+                                s2cloudless_prob=s2cloudless_prob,
                             )
 
                     # =============================================================================================#
@@ -2153,18 +2333,33 @@ def retrieve_images(
                         fn = [filepath_ms, filepath_swir, filepath_QA]
 
                         # Removes images whose cloud cover and no data coverage exceeds the threshold
-                        skip_image = SDS_preprocess.filter_images_by_cloud_cover_nodata(
-                            fn,
-                            satname,
-                            cloud_mask_issue,
-                            max_cloud_no_data_cover,
-                            cloud_threshold,
-                            do_cloud_mask=True,
-                            s2cloudless_prob=60,
+                        filter_metrics = (
+                            SDS_preprocess.filter_images_by_cloud_cover_nodata(
+                                fn,
+                                satname,
+                                cloud_mask_issue,
+                                max_cloud_no_data_cover,
+                                cloud_threshold,
+                                do_cloud_mask=True,
+                                s2cloudless_prob=s2cloudless_prob,
+                                return_metrics=True,
+                            )
                         )
+                        skip_image = filter_metrics["filtered"]
 
                         # if the images was filtered out, skip the image being saved as a jpg
                         if skip_image:
+                            record_skip_cache_entry(
+                                skip_cache,
+                                cache_key,
+                                im_meta,
+                                satname,
+                                query_signature,
+                                filter_metrics,
+                                max_cloud_no_data_cover,
+                                cloud_threshold,
+                                s2cloudless_prob,
+                            )
                             continue
 
                     if save_jpg:
@@ -2179,6 +2374,7 @@ def retrieve_images(
                             filepath_data=inputs["filepath"],
                             collection=inputs["landsat_collection"],
                             apply_cloud_mask=apply_cloud_mask,
+                            s2cloudless_prob=s2cloudless_prob,
                         )
                 except Exception as error:
                     print(
@@ -2210,6 +2406,8 @@ def retrieve_images(
                         logger.error(
                             f"Could not save metadata for {im_meta.get('id','unknown')} that failed.\n{e}"
                         )
+
+    save_skip_cache(inputs, skip_cache)
     # combines all the metadata into a single dictionary and saves it to json
     metadata = get_metadata(inputs)
     print("Satellite images downloaded from GEE and save in %s" % im_folder)
