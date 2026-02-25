@@ -102,7 +102,7 @@ def calculate_cloud_cover_combined(cloud_mask: np.ndarray) -> float:
         return 0.0
 
     total_pixels = cloud_mask.size
-    return np.sum(cloud_mask.astype(int)) / total_pixels
+    return np.sum(cloud_mask) / total_pixels
 
 
 def calculate_cloud_cover_excluding_nodata(
@@ -149,6 +149,7 @@ def filter_images_by_cloud_cover_nodata(
     max_cloud_cover=None,
     do_cloud_mask=True,
     s2cloudless_prob=60,
+    return_metrics=False,
 ):
     """
     Filters images based on cloud cover and no data pixels.
@@ -170,10 +171,22 @@ def filter_images_by_cloud_cover_nodata(
 
     Returns:
         bool: True if the image is filtered, False otherwise.
+        If return_metrics is True, returns a dict with keys:
+            - filtered (bool)
+            - reason (str)
+            - cloud_cover_combined (float)
+            - cloud_cover (float)
     """
+    result = {
+        "filtered": False,
+        "reason": "none",
+        "cloud_cover_combined": 0.0,
+        "cloud_cover": 0.0,
+    }
+
     if max_cloud_no_data_cover is None and max_cloud_cover is None:
         # nothing was filtered return False
-        return False
+        return result if return_metrics else False
     (
         im_ms,
         georef,
@@ -186,7 +199,11 @@ def filter_images_by_cloud_cover_nodata(
     )
 
     # check if the cloud and no data mask exceed the threshold
-    cloud_cover_combined = np.sum(cloud_mask) / cloud_mask.size
+    cloud_cover_combined = calculate_cloud_cover_combined(cloud_mask)
+    cloud_cover = calculate_cloud_cover_excluding_nodata(cloud_mask, im_nodata)
+    result["cloud_cover_combined"] = cloud_cover_combined
+    result["cloud_cover"] = cloud_cover
+
     # if no max cloud and no data cover is provided then check the cloud cover
     if max_cloud_no_data_cover is not None:
         were_images_filtered = remove_files_above_threshold(
@@ -197,19 +214,20 @@ def filter_images_by_cloud_cover_nodata(
         )
         # return True if the image was filtered otherwise continue to check the cloud cover
         if were_images_filtered:
-            return True
+            result["filtered"] = True
+            result["reason"] = "cloud_no_data"
+            return result if return_metrics else True
 
     if max_cloud_cover is not None:
-        cloud_mask_alone = np.logical_xor(cloud_mask, im_nodata)
-        # compute updated cloud cover percentage (without no data pixels)
-        valid_pixels = np.sum(~im_nodata)
-        cloud_cover = np.sum(cloud_mask_alone.astype(int)) / valid_pixels.astype(int)
-        return remove_files_above_threshold(
+        result["filtered"] = remove_files_above_threshold(
             fn, cloud_cover, max_cloud_cover, msg="due to cloud cover"
         )
+        if result["filtered"]:
+            result["reason"] = "cloud"
+        return result if return_metrics else result["filtered"]
 
     # if nothing was filtered then return False
-    return False
+    return result if return_metrics else False
 
 
 def remove_files_above_threshold(
