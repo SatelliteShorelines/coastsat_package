@@ -204,8 +204,23 @@ def filter_images_by_cloud_cover_nodata(
     result["cloud_cover_combined"] = cloud_cover_combined
     result["cloud_cover"] = cloud_cover
 
-    # if no max cloud and no data cover is provided then check the cloud cover
-    if max_cloud_no_data_cover is not None:
+    exceeded_reasons = []
+    exceeds_cloud_no_data = (
+        max_cloud_no_data_cover is not None
+        and cloud_cover_combined > max_cloud_no_data_cover
+    )
+    exceeds_cloud = max_cloud_cover is not None and cloud_cover > max_cloud_cover
+
+    if exceeds_cloud_no_data:
+        exceeded_reasons.append(f"cloud_no_data_cover > {max_cloud_no_data_cover}")
+    if exceeds_cloud:
+        exceeded_reasons.append(f"cloud_cover > {max_cloud_cover}")
+
+    if exceeded_reasons:
+        result["reason"] = "; ".join(exceeded_reasons)
+
+    # if cloud+no-data threshold is exceeded, remove image
+    if exceeds_cloud_no_data:
         were_images_filtered = remove_files_above_threshold(
             fn,
             cloud_cover_combined,
@@ -215,15 +230,13 @@ def filter_images_by_cloud_cover_nodata(
         # return True if the image was filtered otherwise continue to check the cloud cover
         if were_images_filtered:
             result["filtered"] = True
-            result["reason"] = "cloud_no_data"
             return result if return_metrics else True
 
-    if max_cloud_cover is not None:
+    # otherwise, if cloud-only threshold is exceeded, remove image
+    if exceeds_cloud:
         result["filtered"] = remove_files_above_threshold(
             fn, cloud_cover, max_cloud_cover, msg="due to cloud cover"
         )
-        if result["filtered"]:
-            result["reason"] = "cloud"
         return result if return_metrics else result["filtered"]
 
     # if nothing was filtered then return False
