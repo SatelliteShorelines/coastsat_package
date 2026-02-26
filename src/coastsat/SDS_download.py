@@ -65,7 +65,12 @@ def get_skip_query_signature(inputs: dict) -> str:
 
 def load_skip_cache(inputs: dict) -> dict:
     """Load skip cache from disk, returning an empty default when missing/invalid."""
-    default_cache = {"version": 1, "entries": {}}
+    default_cache = {
+        "version": 1,
+        "sitename": inputs.get("sitename", ""),
+        "settings": {},
+        "entries": {},
+    }
     cache_path = get_skip_cache_path(inputs)
     if not os.path.exists(cache_path):
         return default_cache
@@ -79,6 +84,10 @@ def load_skip_cache(inputs: dict) -> dict:
             cache["entries"] = {}
         if "version" not in cache:
             cache["version"] = 1
+        if "sitename" not in cache:
+            cache["sitename"] = inputs.get("sitename", "")
+        if "settings" not in cache or not isinstance(cache["settings"], dict):
+            cache["settings"] = {}
         return cache
     except Exception:
         return default_cache
@@ -88,6 +97,26 @@ def save_skip_cache(inputs: dict, cache: dict) -> None:
     """Persist skip cache to disk."""
     cache_path = get_skip_cache_path(inputs)
     SDS_preprocess.write_to_json(cache_path, cache)
+
+
+def update_skip_cache_metadata(
+    skip_cache: dict,
+    inputs: dict,
+    max_cloud_no_data_cover: float = None,
+    max_cloud_cover: float = None,
+    s2cloudless_prob: int = 60,
+    cloud_mask_issue: bool = False,
+) -> None:
+    """Update top-level cache metadata describing the active run settings."""
+    skip_cache["version"] = 1
+    skip_cache["sitename"] = inputs.get("sitename", "")
+    skip_cache["settings"] = {
+        "max_cloud_no_data_cover": max_cloud_no_data_cover,
+        "max_cloud_cover": max_cloud_cover,
+        "s2cloudless_prob": s2cloudless_prob,
+        "cloud_mask_issue": cloud_mask_issue,
+    }
+    skip_cache["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
 
 
 def build_skip_cache_key(im_meta: dict, satname: str) -> str:
@@ -137,6 +166,36 @@ def should_skip_from_cache(
     return False
 
 
+def prune_skip_cache_for_current_thresholds(
+    skip_cache: dict,
+    query_signature: str,
+    max_cloud_no_data_cover: float = None,
+    max_cloud_cover: float = None,
+) -> int:
+    """Remove stale skip-cache entries that no longer fail active thresholds."""
+    entries = skip_cache.get("entries", {})
+    keys_to_remove = []
+
+    for cache_key, cache_entry in entries.items():
+        if cache_entry.get("query_signature") != query_signature:
+            continue
+        if cache_entry.get("skip_type") != "cloud_nodata":
+            continue
+
+        if not should_skip_from_cache(
+            cache_entry,
+            query_signature,
+            max_cloud_no_data_cover=max_cloud_no_data_cover,
+            max_cloud_cover=max_cloud_cover,
+        ):
+            keys_to_remove.append(cache_key)
+
+    for cache_key in keys_to_remove:
+        entries.pop(cache_key, None)
+
+    return len(keys_to_remove)
+
+
 def record_skip_cache_entry(
     skip_cache: dict,
     cache_key: str,
@@ -144,9 +203,6 @@ def record_skip_cache_entry(
     satname: str,
     query_signature: str,
     metrics: dict,
-    max_cloud_no_data_cover: float,
-    max_cloud_cover: float,
-    s2cloudless_prob: int,
 ) -> None:
     """Record a cloud/no-data skip decision and measured values in cache."""
     skip_cache.setdefault("entries", {})
@@ -158,11 +214,6 @@ def record_skip_cache_entry(
         "cloud_cover_combined": float(metrics.get("cloud_cover_combined", 0.0)),
         "cloud_cover": float(metrics.get("cloud_cover", 0.0)),
         "reason": metrics.get("reason", "cloud_nodata"),
-        "settings": {
-            "max_cloud_no_data_cover": max_cloud_no_data_cover,
-            "max_cloud_cover": max_cloud_cover,
-            "s2cloudless_prob": s2cloudless_prob,
-        },
         "updated_at_utc": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -1762,7 +1813,25 @@ def retrieve_images(
     sat_list = inputs["sat_list"]
     dates = inputs["dates"]
     skip_cache = load_skip_cache(inputs)
+    update_skip_cache_metadata(
+        skip_cache,
+        inputs,
+        max_cloud_no_data_cover=max_cloud_no_data_cover,
+        max_cloud_cover=cloud_threshold,
+        s2cloudless_prob=s2cloudless_prob,
+        cloud_mask_issue=cloud_mask_issue,
+    )
     query_signature = get_skip_query_signature(inputs)
+    removed_cache_entries = prune_skip_cache_for_current_thresholds(
+        skip_cache,
+        query_signature,
+        max_cloud_no_data_cover=max_cloud_no_data_cover,
+        max_cloud_cover=cloud_threshold,
+    )
+    if removed_cache_entries > 0:
+        print(
+            f"Removed {removed_cache_entries} stale skip-cache entries for current thresholds."
+        )
 
     if np.all([len(im_dict_T1[satname]) == 0 for satname in im_dict_T1.keys()]):
         print(
@@ -1821,6 +1890,12 @@ def retrieve_images(
                             f"Skipping cached image '{im_meta.get('id', 'unknown')}' due to cloud/no-data cache"
                         )
                         continue
+                    elif (
+                        cache_entry
+                        and cache_entry.get("query_signature") == query_signature
+                    ):
+                        # stale entry under current thresholds; remove and allow download
+                        skip_cache.get("entries", {}).pop(cache_key, None)
 
                     # get time of acquisition (UNIX time) and convert to datetime
                     acquisition_time = im_meta["properties"]["system:time_start"]
@@ -2005,9 +2080,6 @@ def retrieve_images(
                                 satname,
                                 query_signature,
                                 filter_metrics,
-                                max_cloud_no_data_cover,
-                                cloud_threshold,
-                                s2cloudless_prob,
                             )
                             continue
 
@@ -2166,9 +2238,6 @@ def retrieve_images(
                                 satname,
                                 query_signature,
                                 filter_metrics,
-                                max_cloud_no_data_cover,
-                                cloud_threshold,
-                                s2cloudless_prob,
                             )
                             continue
 
@@ -2356,9 +2425,6 @@ def retrieve_images(
                                 satname,
                                 query_signature,
                                 filter_metrics,
-                                max_cloud_no_data_cover,
-                                cloud_threshold,
-                                s2cloudless_prob,
                             )
                             continue
 
