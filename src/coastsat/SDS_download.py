@@ -136,6 +136,18 @@ def build_skip_cache_key(im_meta: dict, satname: str) -> str:
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
+def get_image_datetime_string(im_meta: dict) -> str:
+    """Return acquisition datetime formatted as YYYY-MM-DD-HH-MM-SS."""
+    timestamp_ms = im_meta.get("properties", {}).get("system:time_start")
+    if timestamp_ms is None:
+        return ""
+    try:
+        dt = datetime.fromtimestamp(timestamp_ms / 1000, tz=pytz.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return ""
+    return dt.strftime("%Y-%m-%d-%H-%M-%S")
+
+
 def should_skip_from_cache(
     cache_entry: dict,
     query_signature: str,
@@ -208,6 +220,7 @@ def record_skip_cache_entry(
     skip_cache.setdefault("entries", {})
     skip_cache["entries"][cache_key] = {
         "image_id": im_meta.get("id", ""),
+        "image_datetime": get_image_datetime_string(im_meta),
         "satname": satname,
         "skip_type": "cloud_nodata",
         "query_signature": query_signature,
@@ -1734,7 +1747,7 @@ def retrieve_images(
             filepath to the directory where the images are downloaded
 
     cloud_threshold: float (default: 0.95)
-        maximum cloud cover percentage within the ROI for images to be kept, otherwise removed
+        maximum cloud cover percentage within the ROI for images to be kept, otherwise removed.
     cloud_mask_issue: bool (default: False)
         Make True is one of the satellites is mis-identifying sand as clouds
     save_jpg: bool:
