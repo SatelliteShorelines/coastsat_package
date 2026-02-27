@@ -14,7 +14,7 @@ import os
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union, Optional
 import zipfile
 import functools
 
@@ -35,7 +35,7 @@ try:
     from osgeo import gdal
 except ModuleNotFoundError as missing_gdal:
     print(
-        f"GDAL is not installed. Please install geopandas to get gdal run 'conda install -c conda-forge geopandas -y' "
+        "GDAL is not installed. Please install GDAL by running 'conda install -c conda-forge gdal -y' "
     )
     raise missing_gdal
 
@@ -47,9 +47,24 @@ gdal.PushErrorHandler("CPLQuietErrorHandler")
 
 
 def get_skip_cache_path(inputs: dict) -> str:
-    """Return the site-level skip cache JSON path."""
+    """
+    Construct the file path to the skip cache JSON file for a given site.
+
+    Args:
+        inputs (dict): A dictionary containing configuration parameters with keys:
+            - 'filepath' (str): The base file path where site directories are stored.
+            - 'sitename' (str): The name of the site.
+
+    Returns:
+        str: The full path to the skip_cache.json file for the specified site.
+
+    Example:
+        >>> inputs = {'filepath': '/data/sites', 'sitename': 'beach_01'}
+        >>> get_skip_cache_path(inputs)
+        '/data/sites/beach_01/skip_cache.json'
+    """
     site_dir = os.path.join(inputs["filepath"], inputs["sitename"])
-    return os.path.join(site_dir, f"{inputs['sitename']}_skip_cache.json")
+    return os.path.join(site_dir, "skip_cache.json")
 
 
 def get_skip_query_signature(inputs: dict) -> str:
@@ -64,7 +79,27 @@ def get_skip_query_signature(inputs: dict) -> str:
 
 
 def load_skip_cache(inputs: dict) -> dict:
-    """Load skip cache from disk, returning an empty default when missing/invalid."""
+    """
+    Load the skip cache from disk or return a default cache structure.
+    Attempts to load a cached dictionary containing skip entries
+    and settings for a given site. If the cache file doesn't exist or is invalid,
+    it returns a default cache structure. The cache is validated to ensure all
+    required keys are present and have the correct types.
+    Args:
+        inputs (dict): A dictionary containing configuration inputs, including
+                      the 'sitename' key used to locate the cache file.
+    Returns:
+        dict: A dictionary with the following structure:
+              {
+                  "version": int,           # Cache format version
+                  "sitename": str,          # Name of the site
+                  "settings": dict,         # Site-specific settings
+                  "entries": dict           # Cached entries/data
+              Returns the loaded and validated cache if available, or a default
+              cache structure if not found or invalid.
+    Raises:
+        None: All exceptions are caught and result in returning the default cache.
+    """
     default_cache = {
         "version": 1,
         "sitename": inputs.get("sitename", ""),
@@ -76,7 +111,7 @@ def load_skip_cache(inputs: dict) -> dict:
         return default_cache
 
     try:
-        with open(cache_path, "r") as fp:
+        with open(cache_path, "r", encoding="utf-8") as fp:
             cache = json.load(fp)
         if not isinstance(cache, dict):
             return default_cache
@@ -111,7 +146,7 @@ def update_skip_cache_metadata(
     skip_cache["version"] = 1
     skip_cache["sitename"] = inputs.get("sitename", "")
     skip_cache["settings"] = {
-        "max_cloud_no_data_cover": max_cloud_no_data_cover,
+        "max_cloud_no_data_cover(percent_no_data)": max_cloud_no_data_cover,
         "max_cloud_cover": max_cloud_cover,
         "s2cloudless_prob": s2cloudless_prob,
         "cloud_mask_issue": cloud_mask_issue,
@@ -1705,9 +1740,9 @@ def retrieve_images(
     cloud_mask_issue: bool = False,
     save_jpg: bool = True,
     apply_cloud_mask: bool = True,
-    months_list: list = None,
-    max_cloud_no_data_cover=0.95,
-    scene_cloud_cover=0.95,
+    months_list: Optional[List[int]] = None,
+    max_cloud_no_data_cover: float = 0.95,
+    scene_cloud_cover: float = 0.95,
     min_roi_coverage: float = 0.3,
     s2cloudless_prob: int = 60,
 ):
@@ -2594,7 +2629,7 @@ def format_date(date_str: str) -> datetime:
         raise ValueError(f"Invalid date format: {date_str}")
 
 
-def get_metadata(inputs):
+def get_metadata(inputs: dict) -> dict:
     """
     Gets the metadata from the downloaded images by parsing .txt files located
     in the \meta subfolder.
