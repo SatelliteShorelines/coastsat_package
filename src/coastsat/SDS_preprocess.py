@@ -212,7 +212,9 @@ def filter_images_by_cloud_cover_nodata(
     exceeds_cloud = max_cloud_cover is not None and cloud_cover > max_cloud_cover
 
     if exceeds_cloud_no_data:
-        exceeded_reasons.append(f"cloud_no_data_cover > {max_cloud_no_data_cover}")
+            exceeded_reasons.append(
+                f"percent_no_data (cloud_cover_combined) > {max_cloud_no_data_cover}"
+            )
     if exceeds_cloud:
         exceeded_reasons.append(f"cloud_cover > {max_cloud_cover}")
 
