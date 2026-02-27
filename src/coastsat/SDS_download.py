@@ -1745,6 +1745,7 @@ def retrieve_images(
     scene_cloud_cover: float = 0.95,
     min_roi_coverage: float = 0.3,
     s2cloudless_prob: int = 60,
+    skip_cache_flush_interval: int = 5,
 ):
     """
     Downloads all images from Landsat 5, Landsat 7, Landsat 8, Landsat 9 and Sentinel-2
@@ -1800,6 +1801,8 @@ def retrieve_images(
         The minimum percentage of the ROI that must be covered by the image.
     s2cloudless_prob: int (default: 60)
         Threshold used for Sentinel-2 s2cloudless cloud masking when filtering cloud/no-data.
+    skip_cache_flush_interval: int (default: 10)
+        Number of processed images between skip-cache disk flushes when cache changes are pending.
 
     Notes:
     -----------
@@ -1876,6 +1879,23 @@ def retrieve_images(
         max_cloud_no_data_cover=max_cloud_no_data_cover,
         max_cloud_cover=cloud_threshold,
     )
+    # create/update cache file before downloads start so progress survives interruptions
+    save_skip_cache(inputs, skip_cache)
+    skip_cache_dirty = False  # flag to track if cache has pending changes that need to be flushed to disk
+    processed_images_since_flush = 0 # counter to track how many images have been processed since the last cache flush
+
+    def flush_skip_cache_if_needed(force: bool = False):
+        nonlocal skip_cache_dirty, processed_images_since_flush
+        if skip_cache_flush_interval <= 0:
+            interval_reached = True
+        else:
+            interval_reached = processed_images_since_flush >= skip_cache_flush_interval
+
+        if skip_cache_dirty and (force or interval_reached):
+            save_skip_cache(inputs, skip_cache)
+            skip_cache_dirty = False # reset dirty flag after flush
+            processed_images_since_flush = 0 # reset counter after flush
+
     if removed_cache_entries > 0:
         print(
             f"Removed {removed_cache_entries} stale skip-cache entries for current thresholds."
@@ -1944,6 +1964,7 @@ def retrieve_images(
                     ):
                         # stale entry under current thresholds; remove and allow download
                         skip_cache.get("entries", {}).pop(cache_key, None)
+                        skip_cache_dirty = True
 
                     # get time of acquisition (UNIX time) and convert to datetime
                     acquisition_time = im_meta["properties"]["system:time_start"]
@@ -2129,6 +2150,7 @@ def retrieve_images(
                                 query_signature,
                                 filter_metrics,
                             )
+                            skip_cache_dirty = True
                             continue
 
                     # =============================================================================================#
@@ -2287,6 +2309,7 @@ def retrieve_images(
                                 query_signature,
                                 filter_metrics,
                             )
+                            skip_cache_dirty = True
                             continue
 
                         if save_jpg:
@@ -2474,6 +2497,7 @@ def retrieve_images(
                                 query_signature,
                                 filter_metrics,
                             )
+                            skip_cache_dirty = True
                             continue
 
                     if save_jpg:
@@ -2520,7 +2544,11 @@ def retrieve_images(
                         logger.error(
                             f"Could not save metadata for {im_meta.get('id','unknown')} that failed.\n{e}"
                         )
+                    finally:
+                        processed_images_since_flush += 1 # increment the counter for processed images
+                        flush_skip_cache_if_needed()
 
+    flush_skip_cache_if_needed(force=True)
     save_skip_cache(inputs, skip_cache)
     # combines all the metadata into a single dictionary and saves it to json
     metadata = get_metadata(inputs)
