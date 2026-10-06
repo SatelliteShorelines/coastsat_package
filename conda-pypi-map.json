@@ -5,7 +5,6 @@
   "geopandas": "geopandas",
   "google-auth": "google-auth",
   "imageio": "imageio",
-  "importlib_resources": "importlib-resources",
   "ipykernel": "ipykernel",
   "joblib": "joblib",
   "jupyterlab": "jupyterlab",

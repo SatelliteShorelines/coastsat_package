@@ -1522,7 +1522,7 @@ def merge_image_tiers(inputs, im_dict_T1, im_dict_T2):
     """
 
     # Merge tier 2 imagery into dictionary if include_T2 is True
-    if inputs.get("include_T2", False):
+    if SDS_tools.to_bool(inputs.get("include_T2", False), "include_T2"):
         for key in inputs["sat_list"]:
             if key in ["S2", "L9"]:
                 continue
@@ -1642,6 +1642,9 @@ def check_images_available(
         Exception: If the Earth Engine API is not initialized.
         Exception: If the dates in inputs["dates"] are not in chronological order.
     """
+    tier1 = SDS_tools.to_bool(tier1, "tier1")
+    tier2 = SDS_tools.to_bool(tier2, "tier2")
+
     if months_list is None:
         months_list = list(range(1, 13))
 
@@ -1924,6 +1927,11 @@ def retrieve_images(
         date, filename, georeferencing accuracy and image coordinate reference system
 
     """
+    # strings like "false" or "False" are treated as False instead of truthy
+    cloud_mask_issue = SDS_tools.to_bool(cloud_mask_issue, "cloud_mask_issue")
+    save_jpg = SDS_tools.to_bool(save_jpg, "save_jpg")
+    apply_cloud_mask = SDS_tools.to_bool(apply_cloud_mask, "apply_cloud_mask")
+
     # create a new directory for this site with the name of the site
     im_folder = os.path.join(inputs["filepath"], inputs["sitename"])
     if not os.path.exists(im_folder):
@@ -3381,6 +3389,7 @@ def warp_image_to_target(
     georef_target = np.array(im_target.GetGeoTransform())
     xres = georef_target[1]
     yres = georef_target[5]
+    double_res = SDS_tools.to_bool(double_res, "double_res")
     if double_res:
         xres = int(georef_target[1] / 2)
         yres = int(georef_target[5] / 2)

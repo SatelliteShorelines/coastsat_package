@@ -1,16 +1,6 @@
-"""Equivalence and performance tests for the transect/shoreline intersection functions.
+"""Tests for SDS_transects: transect/shoreline intersections and the QC filters."""
 
-`compute_intersection_QC` and `compute_intersection` were optimized to stop measuring the
-distance from every shoreline point to every transect origin in a Python loop. Both were
-pure performance changes: the results are meant to be bitwise identical to what the
-previous implementations produced.
-
-These tests pin that claim down by keeping frozen copies of the pre-optimization code in
-this module and diffing the optimized functions against them, plus a handful of
-hand-computed values so the whole suite does not rest on one shared expression being
-right.
-"""
-
+from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 import time
@@ -18,10 +8,45 @@ import warnings
 
 import numpy as np
 import pytest
+import pytz
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from coastsat.SDS_transects import compute_intersection, compute_intersection_QC
+from coastsat import SDS_tools, SDS_transects
+from coastsat.SDS_transects import (
+    compute_intersection,
+    compute_intersection_QC,
+    DEFAULT_SAR_WATER_FRACTION_RANGE,
+    reject_outliers,
+    sar_qc_keep,
+    threshold_filter_applies,
+)
+
+
+# =================================================================================== #
+# Constants and helpers shared by more than one section
+# =================================================================================== #
+
+
+MNDWI = SDS_tools.SEGMENTATION_MNDWI
+SAR_OTSU = SDS_tools.SEGMENTATION_SAR_OTSU
+SAR_MODEL = SDS_tools.SEGMENTATION_SAR_MODEL
+
+
+# =================================================================================== #
+# Equivalence and performance tests for the transect/shoreline intersection functions
+#
+# `compute_intersection_QC` and `compute_intersection` were optimized to stop measuring the
+# distance from every shoreline point to every transect origin in a Python loop. Both were
+# pure performance changes: the results are meant to be bitwise identical to what the
+# previous implementations produced.
+#
+# These tests pin that claim down by keeping frozen copies of the pre-optimization code in
+# this module and diffing the optimized functions against them, plus a handful of
+# hand-computed values so the whole suite does not rest on one shared expression being
+# right.
+# =================================================================================== #
+
 
 # Real shorelines live in a projected (metre) CRS, so coordinates are ~1e5-1e6 with
 # metre-scale variation on top. Build the synthetic data at that magnitude rather than
@@ -762,3 +787,374 @@ def test_optimized_is_substantially_faster_than_reference():
         f"expected a large speedup, got {speedup:.1f}x "
         f"(reference {t_old:.2f}s vs optimized {t_new:.3f}s)"
     )
+
+
+# =================================================================================== #
+# Tests that the otsu_threshold QC filter cannot silently delete SAR shorelines
+#
+# output['MNDWI_threshold'] holds a different quantity depending on how the shoreline was
+# mapped: an MNDWI value (optical), an Otsu threshold in dB (SAR), or NaN (SAR segmentation
+# model, which has no threshold). Comparing the latter two against an MNDWI range drops
+# them - NaN fails every comparison and a dB value near -20 is outside any sensible MNDWI
+# range - so they have to skip the filter instead.
+# =================================================================================== #
+
+
+# wide enough that no optical shoreline is rejected on its own merits
+OPTICAL_RANGE = (-0.5, 0.5)
+
+
+def threshold_make_output(methods, thresholds, satnames=None):
+    start = pytz.utc.localize(datetime(2023, 1, 1))
+    return {
+        "dates": [start + timedelta(days=k) for k in range(len(methods))],
+        "MNDWI_threshold": list(thresholds),
+        "segmentation_method": list(methods),
+        "satname": list(satnames) if satnames else ["S2"] * len(methods),
+    }
+
+
+# ------------------------------------------------------------ threshold_filter_applies
+
+
+@pytest.mark.parametrize(
+    "methods,thresholds,expected",
+    [
+        ([MNDWI, MNDWI], [-0.1, 0.2], [True, True]),
+        # the whole point: a NaN threshold must not be compared against a range
+        ([MNDWI, SAR_MODEL], [-0.1, np.nan], [True, False]),
+        # its threshold is in dB, which no MNDWI range can meaningfully bound
+        ([MNDWI, SAR_OTSU], [-0.1, -19.3], [True, False]),
+        # even if something mislabels the method, NaN can never satisfy a range
+        ([MNDWI], [np.nan], [False]),
+    ],
+    ids=["optical", "sar-model", "sar-otsu", "nan-threshold"],
+)
+def test_threshold_filter_applies(methods, thresholds, expected):
+    output = threshold_make_output(methods, thresholds)
+
+    assert threshold_filter_applies(output).tolist() == expected
+
+
+def test_falls_back_to_satname_for_older_outputs():
+    # outputs written before segmentation_method existed
+    output = threshold_make_output([MNDWI, SAR_OTSU], [-0.1, -19.3], satnames=["S2", "S1"])
+    del output["segmentation_method"]
+
+    assert threshold_filter_applies(output).tolist() == [True, False]
+
+
+def test_optical_only_outputs_without_either_key_are_unchanged():
+    output = {"MNDWI_threshold": [-0.1, 0.2], "dates": [None, None]}
+
+    assert threshold_filter_applies(output).tolist() == [True, True]
+
+
+# ------------------------------------------------------------------- reject_outliers
+
+
+def threshold_transects(n, method, threshold, satname="S1"):
+    """n shorelines, all mapped the same way, with a clean linear chainage."""
+    output = threshold_make_output([method] * n, [threshold] * n, satnames=[satname] * n)
+    # a gently varying series so the despiking step keeps everything
+    cross_distance = {"transect_1": np.linspace(100.0, 110.0, n)}
+    return cross_distance, output
+
+
+THRESHOLD_SETTINGS = {
+    "otsu_threshold": OPTICAL_RANGE,
+    "max_cross_change": 40,
+    "plot_fig": False,
+}
+
+
+@pytest.mark.parametrize(
+    "method,threshold,satname",
+    [(SAR_MODEL, np.nan, "S1"), (SAR_OTSU, -19.3, "S1"), (MNDWI, -0.1, "S2")],
+    ids=["sar-model", "sar-otsu", "optical-inside-the-range"],
+)
+def test_shorelines_the_filter_must_not_reject_all_survive(method, threshold, satname):
+    cross_distance, output = threshold_transects(40, method, threshold, satname=satname)
+
+    chain_dict = reject_outliers(cross_distance, output, THRESHOLD_SETTINGS)
+
+    assert "transect_1" in chain_dict, "every shoreline was dropped by the QC filter"
+    assert np.sum(~np.isnan(chain_dict["transect_1"])) == 40
+
+
+def test_optical_shorelines_outside_the_range_are_still_rejected():
+    # the filter must keep doing its job where it is meaningful
+    cross_distance, output = threshold_transects(40, MNDWI, 0.9, satname="S2")
+
+    chain_dict = reject_outliers(cross_distance, output, THRESHOLD_SETTINGS)
+
+    # fewer than 30 survive the range, so the transect is dropped entirely
+    assert "transect_1" not in chain_dict
+
+
+def test_a_mixed_time_series_keeps_sar_and_filters_optical():
+    n = 60
+    methods = [MNDWI if k % 2 else SAR_MODEL for k in range(n)]
+    # optical thresholds are out of range, SAR is NaN
+    thresholds = [0.9 if k % 2 else np.nan for k in range(n)]
+    satnames = ["S2" if k % 2 else "S1" for k in range(n)]
+    output = threshold_make_output(methods, thresholds, satnames=satnames)
+    cross_distance = {"transect_1": np.linspace(100.0, 110.0, n)}
+
+    chain_dict = reject_outliers(cross_distance, output, dict(THRESHOLD_SETTINGS))
+
+    # the 30 SAR shorelines survive, the 30 out-of-range optical ones do not
+    assert np.sum(~np.isnan(chain_dict["transect_1"])) == 30
+
+
+def test_a_nan_otsu_threshold_setting_still_disables_the_filter():
+    cross_distance, output = threshold_transects(40, MNDWI, 0.9, satname="S2")
+    settings = dict(THRESHOLD_SETTINGS, otsu_threshold=(np.nan, np.nan))
+
+    chain_dict = reject_outliers(cross_distance, output, settings)
+
+    assert np.sum(~np.isnan(chain_dict["transect_1"])) == 40
+
+
+# --------------------------------------------------------------- the output column
+
+
+def test_merge_output_carries_the_new_column():
+    # merge_output builds its keys from the first satellite, so the column has to be
+    # present for every satellite or it is silently dropped for the others
+    output = {
+        "S1": {
+            "dates": [1],
+            "shorelines": [np.zeros((2, 2))],
+            "MNDWI_threshold": [np.nan],
+            "segmentation_method": [SAR_MODEL],
+        },
+        "S2": {
+            "dates": [2],
+            "shorelines": [np.zeros((2, 2))],
+            "MNDWI_threshold": [-0.1],
+            "segmentation_method": [MNDWI],
+        },
+    }
+
+    merged = SDS_tools.merge_output(output)
+
+    assert merged["segmentation_method"] == [SAR_MODEL, MNDWI]
+    assert merged["satname"] == ["S1", "S2"]
+
+
+# =================================================================================== #
+# Tests for the SAR-specific transect QC
+#
+# SAR shorelines skip the MNDWI threshold filter (see the otsu_threshold section above), which
+# left them with no threshold-based QC at all. sar_qc_keep gives them their own checks:
+# the water fraction of the reference buffer (a scene segmented as ~all land or ~all
+# water has no real interface to contour) and, optionally, a dB range for Otsu
+# thresholds - the SAR counterpart of settings['otsu_threshold'].
+# =================================================================================== #
+
+
+def sar_qc_make_output(methods, thresholds=None, water_fractions=None, satnames=None):
+    start = pytz.utc.localize(datetime(2023, 1, 1))
+    n = len(methods)
+    output = {
+        "dates": [start + timedelta(days=k) for k in range(n)],
+        "MNDWI_threshold": list(thresholds) if thresholds else [np.nan] * n,
+        "segmentation_method": list(methods),
+        "satname": list(satnames) if satnames else ["S1"] * n,
+    }
+    if water_fractions is not None:
+        output["water_fraction"] = list(water_fractions)
+    return output
+
+
+SAR_QC_SETTINGS = {
+    "otsu_threshold": (-0.5, 0.5),
+    "max_cross_change": 40,
+    "plot_fig": False,
+}
+
+
+# ------------------------------------------------------------------------ sar_qc_keep
+
+
+def test_healthy_sar_rows_pass():
+    output = sar_qc_make_output([SAR_MODEL, SAR_OTSU], water_fractions=[0.5, 0.3])
+
+    assert sar_qc_keep(output, SAR_QC_SETTINGS).tolist() == [True, True]
+
+
+def test_degenerate_water_fractions_fail():
+    # ~0 or ~1 means the segmentation found no land/water interface
+    output = sar_qc_make_output(
+        [SAR_MODEL, SAR_MODEL, SAR_MODEL], water_fractions=[0.001, 0.999, 0.5]
+    )
+
+    assert sar_qc_keep(output, SAR_QC_SETTINGS).tolist() == [False, False, True]
+
+
+def test_optical_rows_always_pass():
+    # water_fraction is NaN for optical rows, and even a bogus value must not judge them
+    output = sar_qc_make_output(
+        [MNDWI, MNDWI], water_fractions=[np.nan, 0.999], satnames=["S2", "S2"]
+    )
+
+    assert sar_qc_keep(output, SAR_QC_SETTINGS).tolist() == [True, True]
+
+
+def test_nan_water_fractions_are_kept():
+    # an empty reference buffer produces NaN; that is not evidence of a bad scene
+    output = sar_qc_make_output([SAR_MODEL], water_fractions=[np.nan])
+
+    assert sar_qc_keep(output, SAR_QC_SETTINGS).tolist() == [True]
+
+
+def test_outputs_without_the_column_are_kept():
+    # outputs written before water_fraction existed
+    output = sar_qc_make_output([SAR_MODEL, SAR_OTSU])
+
+    assert sar_qc_keep(output, SAR_QC_SETTINGS).tolist() == [True, True]
+
+
+def test_the_range_can_be_tightened():
+    output = sar_qc_make_output([SAR_MODEL, SAR_MODEL], water_fractions=[0.1, 0.5])
+    settings = dict(SAR_QC_SETTINGS, sar_water_fraction_range=(0.3, 0.7))
+
+    assert sar_qc_keep(output, settings).tolist() == [False, True]
+
+
+def test_none_disables_the_water_fraction_check():
+    output = sar_qc_make_output([SAR_MODEL], water_fractions=[0.999])
+    settings = dict(SAR_QC_SETTINGS, sar_water_fraction_range=None)
+
+    assert sar_qc_keep(output, settings).tolist() == [True]
+
+
+def test_the_default_range_is_deliberately_loose():
+    low, high = DEFAULT_SAR_WATER_FRACTION_RANGE
+
+    assert low <= 0.05
+    assert high >= 0.95
+
+
+def test_db_threshold_range_is_off_by_default():
+    output = sar_qc_make_output([SAR_OTSU], thresholds=[-40.0], water_fractions=[0.5])
+
+    assert sar_qc_keep(output, SAR_QC_SETTINGS).tolist() == [True]
+
+
+def test_db_threshold_range_judges_otsu_rows():
+    output = sar_qc_make_output(
+        [SAR_OTSU, SAR_OTSU, SAR_MODEL],
+        thresholds=[-40.0, -20.0, np.nan],
+        water_fractions=[0.5, 0.5, 0.5],
+    )
+    settings = dict(SAR_QC_SETTINGS, sar_otsu_threshold=(-30.0, -10.0))
+
+    # the model row has no threshold, so the dB range cannot judge it
+    assert sar_qc_keep(output, settings).tolist() == [False, True, True]
+
+
+def test_older_outputs_fall_back_to_satname():
+    output = sar_qc_make_output(
+        [MNDWI, MNDWI], water_fractions=[0.999, 0.999], satnames=["S1", "S2"]
+    )
+    del output["segmentation_method"]
+
+    # only the S1 row is treated as SAR
+    assert sar_qc_keep(output, SAR_QC_SETTINGS).tolist() == [False, True]
+
+
+def test_outputs_without_any_key_pass():
+    output = {"dates": [1, 2], "MNDWI_threshold": [np.nan, np.nan]}
+
+    assert sar_qc_keep(output, SAR_QC_SETTINGS).tolist() == [True, True]
+
+
+# -------------------------------------------------------------------- reject_outliers
+
+
+def sar_qc_transects(n, method, water_fractions, thresholds=None):
+    output = sar_qc_make_output(
+        [method] * n,
+        thresholds=thresholds if thresholds else [np.nan] * n,
+        water_fractions=water_fractions,
+    )
+    cross_distance = {"transect_1": np.linspace(100.0, 110.0, n)}
+    return cross_distance, output
+
+
+def test_degenerate_sar_scenes_are_dropped_from_the_time_series():
+    n = 40
+    fractions = [0.999 if k < 5 else 0.5 for k in range(n)]
+    cross_distance, output = sar_qc_transects(n, SAR_MODEL, fractions)
+
+    chain_dict = reject_outliers(cross_distance, output, SAR_QC_SETTINGS)
+
+    assert np.sum(~np.isnan(chain_dict["transect_1"])) == n - 5
+
+
+def test_healthy_sar_scenes_all_survive():
+    cross_distance, output = sar_qc_transects(40, SAR_MODEL, [0.5] * 40)
+
+    chain_dict = reject_outliers(cross_distance, output, SAR_QC_SETTINGS)
+
+    assert np.sum(~np.isnan(chain_dict["transect_1"])) == 40
+
+
+def test_sar_qc_runs_even_when_the_mndwi_filter_is_disabled():
+    # the MNDWI range being NaN used to skip step 2 entirely
+    n = 40
+    fractions = [0.999 if k < 5 else 0.5 for k in range(n)]
+    cross_distance, output = sar_qc_transects(n, SAR_MODEL, fractions)
+    settings = dict(SAR_QC_SETTINGS, otsu_threshold=(np.nan, np.nan))
+
+    chain_dict = reject_outliers(cross_distance, output, settings)
+
+    assert np.sum(~np.isnan(chain_dict["transect_1"])) == n - 5
+
+
+def test_sar_qc_does_not_drop_short_transects_entirely():
+    # the <30-points guard belongs to the MNDWI range filter; SAR QC must not
+    # start deleting whole transects of short time-series
+    n = 10
+    cross_distance, output = sar_qc_transects(n, SAR_MODEL, [0.5] * n)
+    settings = dict(SAR_QC_SETTINGS, otsu_threshold=(np.nan, np.nan))
+
+    chain_dict = reject_outliers(cross_distance, output, settings)
+
+    assert "transect_1" in chain_dict
+    assert np.sum(~np.isnan(chain_dict["transect_1"])) == n
+
+
+def test_db_range_drops_otsu_outliers_in_the_time_series():
+    n = 40
+    thresholds = [-40.0 if k < 5 else -20.0 for k in range(n)]
+    cross_distance, output = sar_qc_transects(n, SAR_OTSU, [0.5] * n, thresholds=thresholds)
+    settings = dict(SAR_QC_SETTINGS, sar_otsu_threshold=(-30.0, -10.0))
+
+    chain_dict = reject_outliers(cross_distance, output, settings)
+
+    assert np.sum(~np.isnan(chain_dict["transect_1"])) == n - 5
+
+
+def test_merge_output_carries_the_water_fraction_column():
+    # merge_output builds its keys from the first satellite, so the column has to
+    # be appended for every satellite or it is silently dropped for the others
+    output = {
+        "S1": {
+            "dates": [1],
+            "shorelines": [np.zeros((2, 2))],
+            "water_fraction": [0.5],
+        },
+        "S2": {
+            "dates": [2],
+            "shorelines": [np.zeros((2, 2))],
+            "water_fraction": [np.nan],
+        },
+    }
+
+    merged = SDS_tools.merge_output(output)
+
+    assert merged["water_fraction"][0] == 0.5
+    assert np.isnan(merged["water_fraction"][1])

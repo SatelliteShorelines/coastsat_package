@@ -18,7 +18,6 @@ dependencies:
   - geopandas
   - google-auth
   - imageio
-  - importlib_resources
   # SDS_shoreline loads the .pkl classifiers with joblib.load; it only reaches the
   # environment today as a scikit-learn transitive dep, so declare it directly.
   - joblib

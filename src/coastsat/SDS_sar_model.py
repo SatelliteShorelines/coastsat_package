@@ -36,16 +36,12 @@ from coastsat import SDS_tools
 
 logger = logging.getLogger(__name__)
 
-# Filename of the default model. The file is not shipped in the wheel (it is ~130 MB,
-# over PyPI's file-size limit): it is downloaded on first use into pooch's OS cache dir
-# by fetch_default_sar_model(), unless a copy already sits in
-# coastsat/classification/models (a dev checkout) or settings['sar_model_path'] points
-# elsewhere.
+# Default model filename. Too large for the wheel, so it is downloaded on first
+# use unless it is in coastsat/classification/models or settings['sar_model_path'] is set.
 DEFAULT_SAR_MODEL_FILENAME = "SAR_3_band_model.onnx"
 
-# Where the default model is downloaded from when it is not on disk. The hash pins the
-# exact upload; pooch verifies it after download, so a tampered or truncated file is
-# rejected rather than silently producing bad masks.
+# Download location of the default model. pooch checks the hash after download, so a
+# tampered or truncated file is rejected.
 SAR_MODEL_CONFIG = {
     "model_name": DEFAULT_SAR_MODEL_FILENAME,
     "url": (
@@ -62,19 +58,12 @@ WATER_THRESHOLD = 0.5
 # Class codes the model was trained with.
 LAND, WATER = 0, 1
 
-# metadata_props keys the model must declare. They say what the *model* was trained on
-# rather than what this module does, and nothing at run time can catch a wrong value: the
-# graph accepts any 3-channel tensor and returns a plausible-looking mask, so running a
-# retrained model with another model's channel order or normalization silently degrades
-# every shoreline it produces. A model that omits them is rejected instead (the run then
-# falls back to Otsu, see SDS_shoreline.load_sar_segmenter).
+# metadata_props keys the model must declare: a wrong value cannot be detected at run time
+# and silently degrades the mask, so a model that omits them is rejected (Otsu fallback).
 REQUIRED_METADATA_KEYS = ("channel_order", "normalization_mean", "normalization_std")
 
-# Defaults for the keys that describe how to *run* the graph rather than what it was
-# trained on. Guessing these is safe because a wrong guess fails loudly: _validate_spec
-# rejects a preprocessing contract this module does not implement, and onnxruntime
-# rejects an input padded to the wrong multiple. They match SAR_3_band_model.onnx
-# (run s1_water_3band_7_8_26_50_epochs).
+# Defaults for the keys that only describe how to run the graph; a wrong guess fails
+# loudly. They match SAR_3_band_model.onnx (run s1_water_3band_7_8_26_50_epochs).
 DEFAULT_SPEC: Dict[str, Any] = {
     "output_stride": 32,
     "nodata": 255,

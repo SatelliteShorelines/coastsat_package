@@ -139,7 +139,7 @@ def plot_detection(
         transform_func=SDS_preprocess.transform_world_coords_to_pixel_coords,
     )
 
-    if is_sar:
+    if SDS_tools.to_bool(is_sar, "is_sar"):
         return plot_sar_detection(
             im_ms,
             im_labels,
@@ -328,7 +328,7 @@ def plot_sar_detection(
         handles=handles, loc="center left", bbox_to_anchor=(1.02, 0.5), fontsize=10
     )
 
-    if settings.get("save_figure", False):
+    if SDS_tools.to_bool(settings.get("save_figure", False), "save_figure"):
         fig.savefig(
             os.path.join(output_path, f"{date}_{satname}.jpg"),
             dpi=150,
@@ -448,7 +448,7 @@ def plot_optical_detection(
 
     skip_image = _handle_user_input(fig, ax1, settings)
 
-    if settings.get("save_figure", False) and not skip_image:
+    if SDS_tools.to_bool(settings.get("save_figure", False), "save_figure") and not skip_image:
         fig.savefig(
             os.path.join(output_path, f"{date}_{satname}.jpg"),
             dpi=150,
@@ -509,7 +509,9 @@ def _add_optical_legend(
 
 
 def _handle_user_input(fig, ax, settings):
-    if not settings.get("check_detection", False):
+    if not SDS_tools.to_bool(
+        settings.get("check_detection", False), "check_detection"
+    ):
         return False
 
     key_event = {}
