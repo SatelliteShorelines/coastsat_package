@@ -788,11 +788,20 @@ def load_classifier(
         elif sand_color == "bright":
             model_file = f"NN_4classes_Landsat_bright{str_new}.pkl"
         elif sand_color == "latest":
-            model_file = f"NN_4classes_Landsat_latest{str_new}.pkl"
+            # the latest model only ships as the _new file
+            model_file = "NN_4classes_Landsat_latest_new.pkl"
         else:  # default or unrecognized value
             model_file = f"NN_4classes_Landsat{str_new}.pkl"
 
     full_model_path = os.path.join(model_path, model_file)
+    # the latest model is not always shipped, fall back to the default model if it is missing
+    if sand_color == "latest" and not os.path.exists(full_model_path):
+        default_model_file = f"NN_4classes_Landsat{str_new}.pkl"
+        print(
+            f"Model '{model_file}' for sand_color 'latest' was not found. "
+            f"Using the default model '{default_model_file}' instead."
+        )
+        full_model_path = os.path.join(model_path, default_model_file)
     return joblib.load(full_model_path)
 
 
@@ -805,14 +814,9 @@ def arr_to_LineString(arr):
 
 
 def get_model_locations():
-    try:
-        import importlib.resources
+    import importlib.resources
 
-        filepath_models = os.path.abspath(importlib.resources.files(models))
-    except AttributeError:
-        from importlib_resources import files
-
-        filepath_models = os.path.abspath(files(models))
+    filepath_models = os.path.abspath(importlib.resources.files(models))
 
     return filepath_models
 
@@ -846,7 +850,16 @@ def load_model(satname: str, settings: dict):
         elif settings["sand_color"] == "default":
             model_filename = f"NN_4classes_Landsat{str_new}.pkl"
         elif settings["sand_color"] == "latest":
-            model_filename = f"NN_4classes_Landsat_latest{str_new}.pkl"
+            # the latest model only ships as the _new file
+            model_filename = "NN_4classes_Landsat_latest_new.pkl"
+            # the latest model is not always shipped, fall back to the default model if it is missing
+            if not os.path.exists(os.path.join(filepath_models, model_filename)):
+                default_model_filename = f"NN_4classes_Landsat{str_new}.pkl"
+                print(
+                    f"Model '{model_filename}' for sand_color 'latest' was not found. "
+                    f"Using the default model '{default_model_filename}' instead."
+                )
+                model_filename = default_model_filename
 
         if model_filename:
             clf = joblib.load(os.path.join(filepath_models, model_filename))
@@ -1284,14 +1297,9 @@ def extract_shorelines(
         contains the extracted shorelines and corresponding dates + metadata
 
     """
-    try:
-        import importlib.resources
+    import importlib.resources
 
-        filepath_models = os.path.abspath(importlib.resources.files(models))
-    except AttributeError:
-        from importlib_resources import files
-
-        filepath_models = os.path.abspath(files(models))
+    filepath_models = os.path.abspath(importlib.resources.files(models))
 
     sitename = settings["inputs"]["sitename"]
     filepath_data = settings["inputs"]["filepath"]
@@ -1491,7 +1499,10 @@ def extract_shorelines(
                     water_fraction = compute_sar_water_fraction(
                         im_water, im_ref_buffer & valid
                     )
-                    if settings.get("sar_save_probability", False):
+                    if SDS_tools.to_bool(
+                        settings.get("sar_save_probability", False),
+                        "sar_save_probability",
+                    ):
                         save_sar_probability(
                             im_prob, valid, fn, logger=logger, date_str=shoreline_date
                         )
@@ -1553,7 +1564,7 @@ def extract_shorelines(
                 )
 
                 # if adjust_detection is True, let the user adjust the detected shoreline
-                if settings["adjust_detection"]:
+                if SDS_tools.to_bool(settings["adjust_detection"], "adjust_detection"):
                     date = filenames[i][:19]
                     skip_image, shoreline, t_mndwi = adjust_detection(
                         im_ms,
@@ -1619,9 +1630,13 @@ def extract_shorelines(
             # visualize the mapped shorelines, there are two options:
             # if settings['check_detection'] = True, shows the detection to the user for accept/reject
             # if settings['save_figure'] = True, saves a figure for each mapped shoreline
-            if settings["check_detection"] or settings["save_figure"]:
+            check_detection = SDS_tools.to_bool(
+                settings["check_detection"], "check_detection"
+            )
+            save_figure = SDS_tools.to_bool(settings["save_figure"], "save_figure")
+            if check_detection or save_figure:
                 date = filenames[i][:19]
-                if not settings["check_detection"]:
+                if not check_detection:
                     plt.ioff()  # turning interactive plotting off
                 from coastsat.SDS_plotting import plot_detection
 
@@ -2114,6 +2129,10 @@ def create_shoreline_buffer(im_shape, georef, image_epsg, pixel_size, settings):
             output spatial reference system
         'reference_shoreline': np.array
             coordinates of the reference shoreline
+        'reference_shoreline_parts': list of np.array (optional)
+            the reference shoreline as one array per separate line. When given,
+            each line is buffered on its own instead of 'reference_shoreline'
+            being treated as a single continuous line
         'max_dist_ref': int
             maximum distance from the reference shoreline in metres
 
@@ -2127,41 +2146,49 @@ def create_shoreline_buffer(im_shape, georef, image_epsg, pixel_size, settings):
     im_buffer = np.ones(im_shape).astype(bool)
 
     if "reference_shoreline" in settings.keys():
-        ref_sl = settings["reference_shoreline"][:, :2]
-
-        # Convert reference shoreline to the image CRS first
-        ref_sl_conv = SDS_tools.convert_epsg(
-            ref_sl, settings["output_epsg"], image_epsg
-        )[:, :2]
-
-        # Densify before converting to pixels.
-        # Use half a pixel so the reference line is safely sampled.
+        # Draw each line separately so the end of one is not joined to the start of the next.
+        ref_sl_parts = settings.get("reference_shoreline_parts") or [
+            settings["reference_shoreline"]
+        ]
         densify_spacing = settings.get("ref_sl_densify_spacing", pixel_size / 2)
-        ref_sl_conv = densify_line_coords(ref_sl_conv, densify_spacing)
 
-        # Convert dense line to pixel coordinates
-        ref_sl_pix = SDS_tools.convert_world2pix(ref_sl_conv, georef)
-        ref_sl_pix_rounded = np.round(ref_sl_pix).astype(int)
-
-        # Rasterize the dense line
+        # Rasterize the dense lines
         im_binary = np.zeros(im_shape, dtype=bool)
 
-        for j in range(len(ref_sl_pix_rounded) - 1):
-            rr, cc = skdraw.line(
-                ref_sl_pix_rounded[j, 1],
-                ref_sl_pix_rounded[j, 0],
-                ref_sl_pix_rounded[j + 1, 1],
-                ref_sl_pix_rounded[j + 1, 0],
-            )
+        for ref_sl_part in ref_sl_parts:
+            ref_sl = np.asarray(ref_sl_part)[:, :2]
+            # a line needs at least two points
+            if len(ref_sl) < 2:
+                continue
 
-            # Clip line pixels to image bounds
-            valid = (rr >= 0) & (rr < im_shape[0]) & (cc >= 0) & (cc < im_shape[1])
+            # Convert reference shoreline to the image CRS first
+            ref_sl_conv = SDS_tools.convert_epsg(
+                ref_sl, settings["output_epsg"], image_epsg
+            )[:, :2]
 
-            im_binary[rr[valid], cc[valid]] = True
+            # Densify to half-pixel spacing before converting to pixels so the line is fully sampled.
+            ref_sl_conv = densify_line_coords(ref_sl_conv, densify_spacing)
 
-        # Dilate the binary reference line to create the buffer. This only makes
-        # sense when a reference shoreline was given; without one the buffer stays
-        # all True, so the whole image is searched.
+            # Convert dense line to pixel coordinates
+            ref_sl_pix = SDS_tools.convert_world2pix(ref_sl_conv, georef)
+            ref_sl_pix_rounded = np.round(ref_sl_pix).astype(int)
+
+            for j in range(len(ref_sl_pix_rounded) - 1):
+                rr, cc = skdraw.line(
+                    ref_sl_pix_rounded[j, 1],
+                    ref_sl_pix_rounded[j, 0],
+                    ref_sl_pix_rounded[j + 1, 1],
+                    ref_sl_pix_rounded[j + 1, 0],
+                )
+
+                # Clip line pixels to image bounds
+                valid = (
+                    (rr >= 0) & (rr < im_shape[0]) & (cc >= 0) & (cc < im_shape[1])
+                )
+
+                im_binary[rr[valid], cc[valid]] = True
+
+        # Dilate the reference line into the buffer; without a reference shoreline the whole image is searched.
         max_dist_ref_pixels = int(np.ceil(settings["max_dist_ref"] / pixel_size))
         se = morphology.disk(max_dist_ref_pixels)
         im_buffer = SDS_tools.binary_dilation(im_binary, se)
@@ -2456,7 +2483,7 @@ def show_sar_detection(
     ax2.axis("off")
 
     # Save output
-    if settings["save_figure"]:
+    if SDS_tools.to_bool(settings["save_figure"], "save_figure"):
         fig.savefig(
             os.path.join(filepath, f"{date}_{satname}.jpg"),
             dpi=150,
@@ -2543,6 +2570,7 @@ def show_detection(
         if not os.path.exists(filepath):
             os.makedirs(filepath)
 
+    sar_image = SDS_tools.to_bool(sar_image, "sar_image")
     if sar_image:
         im_RGB = im_ms
     else:
@@ -2727,7 +2755,7 @@ def show_detection(
 
     # if check_detection is True, let user manually accept/reject the images
     skip_image = False
-    if settings["check_detection"]:
+    if SDS_tools.to_bool(settings["check_detection"], "check_detection"):
         # set a key event to accept/reject the detections (see https://stackoverflow.com/a/15033071)
         # this variable needs to be immuatable so we can access it after the keypress event
         key_event = {}
@@ -2791,7 +2819,7 @@ def show_detection(
                 plt.waitforbuttonpress()
 
     # if save_figure is True, save a .jpg under /jpg_files/detection
-    if settings["save_figure"] and not skip_image:
+    if SDS_tools.to_bool(settings["save_figure"], "save_figure") and not skip_image:
         fig.savefig(
             os.path.join(filepath, date + "_" + satname + ".jpg"),
             dpi=150,
@@ -3144,7 +3172,7 @@ def adjust_detection(
             plt.waitforbuttonpress()
 
     # if save_figure is True, save a .jpg under /jpg_files/detection
-    if settings["save_figure"] and not skip_image:
+    if SDS_tools.to_bool(settings["save_figure"], "save_figure") and not skip_image:
         fig.savefig(os.path.join(filepath, date + "_" + satname + ".jpg"), dpi=150)
 
     # don't close the figure window, but remove all axes and settings, ready for next plot

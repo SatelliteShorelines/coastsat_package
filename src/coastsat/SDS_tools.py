@@ -79,6 +79,33 @@ _POL_RE = re.compile(
 _HAS_FOOTPRINT_RECTANGLE = hasattr(morphology, "footprint_rectangle")
 
 
+def to_bool(value, name: str = "value") -> bool:
+    """
+    Converts a boolean-like value to a bool.
+
+    Strings such as "false", "False", "no", "0" or "off" are converted to False instead of
+    being treated as truthy, and strings such as "true", "yes", "1" or "on" are converted to True.
+
+    Args:
+        value: The value to convert.
+        name (str): Name of the parameter, used in the error message.
+
+    Returns:
+        bool: The converted value.
+
+    Raises:
+        ValueError: If value is a string that is not a recognized boolean.
+    """
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in ("false", "f", "no", "n", "0", "off", "none", ""):
+            return False
+        if cleaned in ("true", "t", "yes", "y", "1", "on"):
+            return True
+        raise ValueError(f"{name} must be a boolean, got '{value}'")
+    return bool(value)
+
+
 def footprint_square(width: int) -> np.ndarray:
     """Square footprint of side `width`, spelled for the installed scikit-image."""
     if _HAS_FOOTPRINT_RECTANGLE:

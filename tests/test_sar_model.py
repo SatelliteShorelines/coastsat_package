@@ -1,13 +1,6 @@
-"""Tests for the ONNX preprocessing and inference contract in SDS_sar_model.
+"""Tests for SDS_sar_model: the ONNX preprocessing/inference contract and the real model."""
 
-The ONNX graph starts at the normalized input tensor, so every one of these steps lives
-in our code and none of them fails loudly when it is wrong - it just degrades the
-prediction. These tests pin each step of the model's inference guide.
-
-A stub session stands in for onnxruntime so the suite needs neither onnxruntime nor the
-130 MB model file.
-"""
-
+import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -19,12 +12,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from coastsat import SDS_sar_model, SDS_tools
 from coastsat.SDS_sar_model import (
-    SarModelUnavailable,
     build_model_input,
     pad_to_multiple,
     read_model_spec,
+    SarModelUnavailable,
     segment_water,
 )
+
+
+# =================================================================================== #
+# Tests for the ONNX preprocessing and inference contract in SDS_sar_model
+#
+# The ONNX graph starts at the normalized input tensor, so every one of these steps lives
+# in our code and none of them fails loudly when it is wrong - it just degrades the
+# prediction. These tests pin each step of the model's inference guide.
+#
+# A stub session stands in for onnxruntime so the suite needs neither onnxruntime nor the
+# 130 MB model file.
+# =================================================================================== #
+
 
 MEAN = np.array([-12.59, -20.26, 10.5465], dtype=np.float32)
 STD = np.array([5.26, 5.91, 7.6855], dtype=np.float32)
@@ -176,46 +182,35 @@ def test_defaults_still_fill_in_the_keys_that_only_describe_the_graph():
     assert spec["nodata"] == 255
 
 
-def test_rejects_normalization_that_is_not_numeric():
-    metadata = dict(DEFAULT_METADATA, normalization_mean="not a list of numbers")
+@pytest.mark.parametrize(
+    "override,match",
+    [
+        ({"normalization_mean": "not a list of numbers"}, "cannot be read as numbers"),
+        # feeding this model our composite would silently transpose VH and VV-VH
+        ({"channel_order": json.dumps(["VV", "VV-VH", "VH"])}, "expects channels"),
+        # the Lee-family filters do not export into the graph, so they would have to be
+        # applied here; running unfiltered data through a filtered model is wrong
+        ({"speckle_filter": json.dumps({"type": "lee_sigma"})}, "speckle filter"),
+        ({"input_scale": "linear"}, "dB"),
+        ({"normalization_std": json.dumps([5.26, 0.0, 7.6855])}, "zero normalization std"),
+    ],
+    ids=[
+        "non-numeric-normalization",
+        "reordered-channels",
+        "speckle-filter",
+        "linear-input",
+        "zero-std",
+    ],
+)
+def test_rejects_a_model_this_pipeline_cannot_feed(override, match):
+    metadata = dict(DEFAULT_METADATA, **override)
 
-    with pytest.raises(SarModelUnavailable, match="cannot be read as numbers"):
+    with pytest.raises(SarModelUnavailable, match=match):
         read_model_spec(FakeSession(metadata))
 
 
 def test_channel_order_must_match_the_composite_bands(spec):
     assert list(spec["channel_order"]) == list(SDS_tools.SAR_COMPOSITE_BANDS)
-
-
-def test_rejects_a_model_with_a_reordered_channel_order():
-    # feeding this model our composite would silently transpose VH and VV-VH
-    metadata = dict(DEFAULT_METADATA, channel_order=json.dumps(["VV", "VV-VH", "VH"]))
-
-    with pytest.raises(SarModelUnavailable, match="expects channels"):
-        read_model_spec(FakeSession(metadata))
-
-
-def test_rejects_a_model_trained_with_a_speckle_filter():
-    # the Lee-family filters do not export into the graph, so they would have to be
-    # applied here; running unfiltered data through a filtered model is wrong
-    metadata = dict(DEFAULT_METADATA, speckle_filter=json.dumps({"type": "lee_sigma"}))
-
-    with pytest.raises(SarModelUnavailable, match="speckle filter"):
-        read_model_spec(FakeSession(metadata))
-
-
-def test_rejects_a_model_expecting_linear_input():
-    metadata = dict(DEFAULT_METADATA, input_scale="linear")
-
-    with pytest.raises(SarModelUnavailable, match="dB"):
-        read_model_spec(FakeSession(metadata))
-
-
-def test_rejects_a_zero_normalization_std():
-    metadata = dict(DEFAULT_METADATA, normalization_std=json.dumps([5.26, 0.0, 7.6855]))
-
-    with pytest.raises(SarModelUnavailable, match="zero normalization std"):
-        read_model_spec(FakeSession(metadata))
 
 
 # ------------------------------------------------------------------------ padding
@@ -571,3 +566,117 @@ def test_explicit_missing_path_does_not_download(monkeypatch, tmp_path):
 
     with pytest.raises(SarModelUnavailable, match="not found"):
         SDS_sar_model.load_sar_model(str(tmp_path / "missing.onnx"))
+
+
+# =================================================================================== #
+# End-to-end check of the real ONNX model on a real downloaded scene
+#
+# Skipped unless onnxruntime is installed, the 130 MB model is present, and a
+# dual-polarization session exists on disk. Everything else about the model path is
+# covered by the stubbed tests above.
+# =================================================================================== #
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SESSION = REPO_ROOT / "data" / "test_s1_downloads_7_24" / "S1"
+
+
+def scene_paths():
+    """The VV/VH pair of the first scene of the session, or None."""
+    if not (SESSION / "VV").is_dir() or not (SESSION / "VH").is_dir():
+        return None
+    for vv in sorted((SESSION / "VV").glob("*_VV.tif")):
+        vh = SESSION / "VH" / vv.name.replace("_VV.tif", "_VH.tif")
+        if vh.exists():
+            return str(vv), str(vh)
+    return None
+
+
+PAIR = scene_paths()
+
+
+def real_model_skip_reason():
+    """Why the real model cannot run here, or None when it can."""
+    if importlib.util.find_spec("onnxruntime") is None:
+        return "onnxruntime is not installed"
+    if not Path(SDS_sar_model.get_sar_model_path({})).is_file():
+        return "the SAR model .onnx is not present"
+    if PAIR is None:
+        return "no dual-polarization scene on disk"
+    return None
+
+
+# a per-test mark rather than a module-level pytestmark: the stubbed tests above share
+# this file and must keep running when the real model is unavailable
+SKIP_REASON = real_model_skip_reason()
+requires_real_model = pytest.mark.skipif(SKIP_REASON is not None, reason=str(SKIP_REASON))
+
+
+@pytest.fixture(scope="module")
+def segmenter():
+    return SDS_sar_model.load_sar_model()
+
+
+@pytest.fixture(scope="module")
+def scene():
+    im_ms, _georef = SDS_tools.read_sar_image(list(PAIR))
+    composite = SDS_tools.build_sar_composite(im_ms, ["VV", "VH"])
+    valid = SDS_tools.read_sar_valid_mask(list(PAIR))
+    return composite, valid
+
+
+@requires_real_model
+def test_the_packaged_model_declares_the_expected_contract(segmenter):
+    _session, spec = segmenter
+
+    assert list(spec["channel_order"]) == list(SDS_tools.SAR_COMPOSITE_BANDS)
+    assert np.allclose(spec["mean"], [-12.59, -20.26, 10.5465])
+    assert np.allclose(spec["std"], [5.26, 5.91, 7.6855])
+    assert spec["output_stride"] == 32
+    assert str(spec["input_scale"]).lower() == "db"
+
+
+@requires_real_model
+def test_the_downloaded_rasters_are_in_db(scene):
+    composite, _valid = scene
+
+    # sanity check from the model's guide: VV over land is roughly -5 to -15 dB and
+    # VH lower still. A linear-power raster would be near 0 and predict one class.
+    assert -30 < np.median(composite[:, :, 0]) < 0
+    assert np.median(composite[:, :, 1]) < np.median(composite[:, :, 0])
+
+
+@requires_real_model
+def test_segments_a_real_scene_into_land_and_water(segmenter, scene):
+    session, spec = segmenter
+    composite, valid = scene
+
+    im_water, prob = SDS_sar_model.segment_water(composite, valid, session, spec)
+
+    assert im_water.shape == composite.shape[:2]
+    assert prob.shape == composite.shape[:2]
+    # a coastal scene must contain both classes; all-one-class means the input scale
+    # or the channel order is wrong
+    assert 0.05 < im_water.mean() < 0.95
+    assert np.nanmin(prob) >= 0.0 and np.nanmax(prob) <= 1.0
+
+
+@requires_real_model
+def test_a_higher_threshold_never_grows_the_water_class(segmenter, scene):
+    session, spec = segmenter
+    composite, valid = scene
+
+    lenient, _ = SDS_sar_model.segment_water(composite, valid, session, spec, 0.5)
+    strict, _ = SDS_sar_model.segment_water(composite, valid, session, spec, 0.9)
+
+    assert strict.sum() <= lenient.sum()
+    assert np.all(lenient[strict])  # strict water is a subset of lenient water
+
+
+@requires_real_model
+def test_the_session_is_cached(segmenter):
+    session, _spec = segmenter
+
+    again, _ = SDS_sar_model.load_sar_model()
+
+    assert again is session

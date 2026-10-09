@@ -193,6 +193,7 @@ def filter_images_by_cloud_cover_nodata(
         "cloud_cover_combined": 0.0,
         "cloud_cover": 0.0,
     }
+    return_metrics = SDS_tools.to_bool(return_metrics, "return_metrics")
 
     if max_cloud_no_data_cover is None and max_cloud_cover is None:
         # nothing was filtered return False
@@ -663,6 +664,7 @@ def preprocess_single(
         Landsat collection 'C02'
     do_cloud_mask: boolean
         if True, apply the cloud mask to the image. If False, the cloud mask is not applied.
+        cloud_mask_issue, pan_off and do_cloud_mask also accept strings like "true" or "false".
     s2cloudless_prob: float [0,100)
             threshold to identify cloud pixels in the s2cloudless probability mask
 
@@ -684,6 +686,10 @@ def preprocess_single(
         2D array with True where no data values (-inf) are located
 
     """
+    # strings like "false" or "False" are treated as False instead of truthy
+    cloud_mask_issue = SDS_tools.to_bool(cloud_mask_issue, "cloud_mask_issue")
+    pan_off = SDS_tools.to_bool(pan_off, "pan_off")
+    do_cloud_mask = SDS_tools.to_bool(do_cloud_mask, "do_cloud_mask")
 
     if isinstance(fn, list):
         fn_to_split = fn[0]

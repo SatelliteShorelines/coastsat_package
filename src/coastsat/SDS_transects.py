@@ -328,7 +328,7 @@ def compute_intersection_QC(output, transects, settings, use_progress_bar: bool 
 
     # loop through each transect
     transect_keys = transects.keys()
-    if use_progress_bar:
+    if SDS_tools.to_bool(use_progress_bar, "use_progress_bar"):
         transect_keys = tqdm(
             transect_keys, desc="Computing transect shoreline intersections"
         )
@@ -692,7 +692,7 @@ def reject_outliers(cross_distance, output, settings):
         chain_dict[key] = chainage
 
         # figure for QA
-        if settings["plot_fig"]:
+        if SDS_tools.to_bool(settings["plot_fig"], "plot_fig"):
             fig, ax = plt.subplots(2, 1, figsize=[12, 6], sharex=True)
             fig.set_tight_layout(True)
             ax[0].grid(linestyle=":", color="0.5")
