@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coastsat_package"
-version = "0.5.1"
+version = "0.5.2"
 description = "A packaged version of CoastSat: a global shoreline mapping tool using satellite imagery"
 readme = "README.md"
 requires-python = ">=3.10"
